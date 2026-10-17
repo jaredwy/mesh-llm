@@ -246,6 +246,15 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
             skippy_error_free(error);
             return total;
         }
+        // The facade materialises the profile's own identities too.
+        read(profile.profile_id);
+        read(profile.graph_identity);
+        read(profile.profile_identity);
+        read(profile.slice_identity);
+        read(profile.source_snapshot_identity);
+        read(profile.graph_configuration_id);
+        read(profile.backend_id);
+
         const auto read_values = [&](skippy_stage_plan_value_kind kind, std::uint64_t count) {
             for (std::size_t slot = 0; slot < count; ++slot) {
                 skippy_stage_plan_value_desc_v1 value{};

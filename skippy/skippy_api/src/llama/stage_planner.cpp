@@ -51,6 +51,22 @@ std::expected<void, PlanFailure> check(enum skippy_status status, ErrorSlot& err
     return std::unexpected(std::move(failure));
 }
 
+/// Fast path for the hot read loops: writes the failure only when it happens,
+/// so the common case constructs no `expected` at all.
+bool read_string_into(const skippy_stage_plan& plan, skippy_stage_plan_string_ref_v1 reference,
+                      std::string& out, PlanFailure& out_failure, ErrorSlot& error) {
+    error.raw = nullptr;
+    const char* data = nullptr;
+    std::size_t length = 0;
+    const auto status = skippy_stage_plan_string_v1(&plan, reference, &data, &length, &error.raw);
+    if (auto ok = check(status, error); !ok.has_value()) {
+        out_failure = ok.error();
+        return false;
+    }
+    out.assign(data, length);
+    return true;
+}
+
 std::expected<std::string, PlanFailure> read_string(const skippy_stage_plan& plan,
                                                     skippy_stage_plan_string_ref_v1 reference) {
     ErrorSlot error;
@@ -86,24 +102,26 @@ read_values(const skippy_stage_plan& plan, std::size_t profile_index,
             skippy_stage_plan_value_kind kind, std::uint64_t count) {
     std::vector<FrontierValue> values;
     values.reserve(static_cast<std::size_t>(count));
+    PlanFailure failure;
+    ErrorSlot error;
     for (const std::size_t index :
          std::views::iota(std::size_t{0}, static_cast<std::size_t>(count))) {
         skippy_stage_plan_value_desc_v1 desc{};
         desc.abi_version = SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION;
         desc.struct_size = sizeof(desc);
-        ErrorSlot error;
+        error.raw = nullptr;
         const auto status =
             skippy_stage_plan_value_at_v1(&plan, profile_index, kind, index, &desc, &error.raw);
         if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
 
-        auto identity = read_string(plan, desc.identity);
-        if (!identity.has_value()) return std::unexpected(identity.error());
-        auto binding = read_string(plan, desc.binding);
-        if (!binding.has_value()) return std::unexpected(binding.error());
-        values.push_back(FrontierValue{
-            .identity = ValueIdentity{std::move(*identity)},
-            .binding = ValueBinding{std::move(*binding)},
-        });
+        FrontierValue value;
+        if (!read_string_into(plan, desc.identity, value.identity.value, failure, error)) {
+            return std::unexpected(failure);
+        }
+        if (!read_string_into(plan, desc.binding, value.binding.value, failure, error)) {
+            return std::unexpected(failure);
+        }
+        values.push_back(std::move(value));
     }
     return values;
 }
