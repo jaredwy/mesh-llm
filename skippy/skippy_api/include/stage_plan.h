@@ -259,6 +259,9 @@ struct StagePlannerInputs {
 /// stage's exports are exactly the next stage's imports.
 [[nodiscard]] std::expected<void, PlanError> validate_chain(std::span<const StagePlan> stages);
 
+/// Stable name of a rejection reason, for logs and error messages.
+[[nodiscard]] std::string_view describe(PlanError error) noexcept;
+
 } // namespace skippy
 
 #endif // SKIPPY_API_STAGE_PLAN_H

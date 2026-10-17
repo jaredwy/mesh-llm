@@ -135,6 +135,17 @@ pub mod ffi {
         import_binding_hex: Vec<String>,
         export_identity_hex: Vec<String>,
         export_binding_hex: Vec<String>,
+        frontier_values: usize,
+        state_effects: usize,
+        written_state_effects: usize,
+        recurrent_state: bool,
+    }
+
+    /// Outcome of validating a stage chain.
+    #[derive(Debug)]
+    struct ChainValidation {
+        ok: bool,
+        error: String,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -177,6 +188,13 @@ pub mod ffi {
         /// elements of `output`.
         /// Plans `stage_count` contiguous stages over the model at `path`.
         fn plan_stages(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
+
+        /// Checks that a plan chain is contiguous and hands over cleanly.
+        fn validate_chain(
+            self: Pin<&mut Bridge>,
+            path: &str,
+            stage_count: u32,
+        ) -> ChainValidation;
 
         fn embed(self: Pin<&mut Bridge>, session: &Session, tokens: &[i32], output: &mut [f32]) -> EmbedResult;
 

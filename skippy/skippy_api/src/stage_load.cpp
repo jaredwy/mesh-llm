@@ -29,6 +29,13 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
         config.activation_import_identities.push_back(value.identity.view());
         config.activation_import_bindings.push_back(value.binding.view());
     }
+    if (const auto semantics = summarize(plan, profile); semantics.has_value()) {
+        config.frontier_values = semantics->frontier_values;
+        config.state_effects = found->state_effects.size();
+        config.written_state_effects = semantics->written;
+        config.recurrent_state = semantics->recurrent;
+    }
+
     config.activation_export_identities.reserve(found->activation_exports.size());
     config.activation_export_bindings.reserve(found->activation_exports.size());
     for (const FrontierValue& value : found->activation_exports) {

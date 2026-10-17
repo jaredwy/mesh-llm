@@ -188,9 +188,25 @@ impl Runtime {
                     .zip(info.export_binding_hex)
                     .map(|(identity, binding)| FrontierValue { identity, binding })
                     .collect(),
+                semantics: StageSemantics {
+                    frontier_values: info.frontier_values,
+                    state_effects: info.state_effects,
+                    written_state_effects: info.written_state_effects,
+                    recurrent: info.recurrent_state,
+                },
             });
         }
         Ok(plans)
+    }
+
+    /// Checks that the stages of `path` form one contiguous, handover-clean chain.
+    pub fn validate_stage_chain(&self, path: &str, stages: u32) -> Result<(), ChainError> {
+        let result = self.lock().pin_mut().validate_chain(path, stages);
+        if result.ok {
+            Ok(())
+        } else {
+            Err(ChainError::Invalid(result.error))
+        }
     }
 
     pub fn load_model(&self, path: &str) -> Result<Model<'_>, RuntimeError> {
@@ -217,7 +233,39 @@ pub struct StagePlan {
     pub imports: Vec<FrontierValue>,
     /// Values handed to the successor stage.
     pub exports: Vec<FrontierValue>,
+    /// What the stage's state looks like, without materialising it.
+    pub semantics: StageSemantics,
 }
+
+/// State shape of one stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StageSemantics {
+    /// Values crossing the boundary in either direction.
+    pub frontier_values: usize,
+    /// State effects (KV or recurrent) this stage touches.
+    pub state_effects: usize,
+    /// How many of those are written.
+    pub written_state_effects: usize,
+    /// True when the stage holds recurrent state rather than attention KV.
+    pub recurrent: bool,
+}
+
+/// Outcome of validating a plan chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainError {
+    /// The chain is not a valid split; the message names the broken rule.
+    Invalid(String),
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) => write!(formatter, "invalid stage chain: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for ChainError {}
 
 /// One value crossing a stage boundary. Both halves are hex-encoded tags.
 #[derive(Debug, Clone, PartialEq, Eq)]

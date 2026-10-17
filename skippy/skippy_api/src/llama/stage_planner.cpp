@@ -420,6 +420,29 @@ configs_from(const std::vector<const StagePlan*>& plans) {
 
 } // namespace
 
+std::expected<std::vector<StagePlan>, PlanFailure>
+plan_model_plans(const std::string& path, std::span<const LayerRange> ranges) {
+    auto configs = plan_model_stages(path, ranges);
+    if (!configs) return std::unexpected(configs.error());
+    // The cache holds the plans these configs borrow from; re-deriving the
+    // values costs microseconds next to a realize.
+    const std::string key = cache_key(path, ranges);
+    PlanStore& store = plan_store();
+    const std::scoped_lock lock(store.mutex);
+    const auto found = store.by_key.find(key);
+    if (found == store.by_key.end()) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::Rejected,
+            .message = "plan vanished from the cache",
+        });
+    }
+    std::vector<StagePlan> plans;
+    plans.reserve(found->second.size());
+    for (const StagePlan* plan : found->second)
+        plans.push_back(*plan);
+    return plans;
+}
+
 std::expected<std::vector<StageLoadConfig>, PlanFailure>
 plan_model_stages(const std::string& path, std::span<const LayerRange> ranges) {
     if (ranges.empty()) {

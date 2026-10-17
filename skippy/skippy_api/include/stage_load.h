@@ -35,6 +35,12 @@ struct StageLoadConfig {
     std::vector<std::string_view> activation_export_identities;
     std::vector<std::string_view> activation_export_bindings;
 
+    /// What the stage's state looks like, for callers that never materialize.
+    std::size_t frontier_values = 0;
+    std::size_t state_effects = 0;
+    std::size_t written_state_effects = 0;
+    bool recurrent_state = false;
+
     [[nodiscard]] bool staged() const noexcept {
         return !resident_identities.empty() && !execution_contract.empty();
     }

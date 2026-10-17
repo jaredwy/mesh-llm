@@ -89,6 +89,14 @@ private:
 [[nodiscard]] std::expected<std::vector<StageLoadConfig>, PlanFailure>
 plan_model_stages(const std::string& path, std::span<const LayerRange> ranges);
 
+/// Plans `ranges` and returns the plans themselves.
+///
+/// Use this when you need to validate a chain or read semantics; use
+/// `plan_model_stages` when you only need loader configuration. Both share one
+/// process-wide cache, so calling either one first warms the other.
+[[nodiscard]] std::expected<std::vector<StagePlan>, PlanFailure>
+plan_model_plans(const std::string& path, std::span<const LayerRange> ranges);
+
 /// Validates a chain natively, without materializing anything.
 [[nodiscard]] std::expected<void, PlanFailure>
 validate_chain(std::span<const StagePlanHandle> plans);

@@ -54,6 +54,11 @@ TEST(StageLoadConfig, CarriesTheClosureAndContract) {
     const auto config = skippy::stage_load_config(value, ProfileId{"decode"});
     ASSERT_TRUE(config.has_value());
     EXPECT_TRUE(config->staged());
+    const auto& profile = value.profiles.front();
+    EXPECT_EQ(config->frontier_values,
+              profile.activation_exports.size() + profile.activation_imports.size());
+    EXPECT_EQ(config->state_effects, profile.state_effects.size());
+    EXPECT_FALSE(config->recurrent_state);
     EXPECT_EQ(config->layers, (LayerRange{0, 6}));
     EXPECT_EQ(config->execution_contract, "{\"version\":1}");
     ASSERT_EQ(config->resident_identities.size(), 2U);

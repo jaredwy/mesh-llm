@@ -75,6 +75,15 @@ fn stages_partition_the_model_and_share_one_boundary() {
     }
 
     assert!(!plans[0].exports.is_empty(), "a split stage exports a frontier");
+    assert_eq!(
+        plans[0].semantics.frontier_values,
+        plans[0].exports.len() + plans[0].imports.len(),
+        "semantics count what crosses the boundary"
+    );
+    // A fresh split must validate as one clean chain.
+    runtime
+        .validate_stage_chain(&path, 2)
+        .expect("two stages form a chain");
     // The identity is the contract across the boundary; the binding is
     // side-local (the producer's tensor versus the consumer's slot), so only
     // the identities must agree.

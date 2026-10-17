@@ -145,6 +145,22 @@ std::expected<void, PlanError> validate_link(std::span<const StagePlan> stages, 
 
 } // namespace
 
+std::string_view describe(PlanError error) noexcept {
+    switch (error) {
+    case PlanError::EmptyChain: return "empty chain";
+    case PlanError::InvalidRange: return "invalid range";
+    case PlanError::IncompletePartition: return "incomplete partition";
+    case PlanError::LayerCountMismatch: return "layer count mismatch";
+    case PlanError::PackageMismatch: return "package mismatch";
+    case PlanError::ProfileCountMismatch: return "profile count mismatch";
+    case PlanError::ProfileIdentityMismatch: return "profile identity mismatch";
+    case PlanError::ActivationFrontierMismatch: return "activation frontier mismatch";
+    case PlanError::Rejected: return "rejected";
+    case PlanError::BackendFailed: return "backend failed";
+    }
+    return "unknown";
+}
+
 std::expected<void, PlanError> validate_chain(std::span<const StagePlan> stages) {
     if (stages.empty()) return std::unexpected(PlanError::EmptyChain);
 

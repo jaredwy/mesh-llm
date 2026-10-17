@@ -28,6 +28,7 @@ struct WorkloadResult;
 struct EmbedResult;
 struct RerankResult;
 struct StagePlanInfo;
+struct ChainValidation;
 struct EncodeResult;
 
 class Bridge {
@@ -43,6 +44,10 @@ public:
     /// Plans `stage_count` contiguous stages over the model at `path`.
     [[nodiscard]] rust::Vec<StagePlanInfo> plan_stages(rust::Str path,
                                                        std::uint32_t stage_count) noexcept;
+
+    /// Checks that a plan chain is contiguous and hands over cleanly.
+    [[nodiscard]] ChainValidation validate_chain(rust::Str path,
+                                                 std::uint32_t stage_count) noexcept;
     [[nodiscard]] RuntimeStatus unload_model(Model& model) noexcept;
 
     [[nodiscard]] SessionResult create_session(const Model& model, SessionConfig config) noexcept;
