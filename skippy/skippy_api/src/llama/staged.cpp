@@ -27,20 +27,17 @@ StageSpec own(const StageLoadConfig& config) {
     for (const std::string_view value : config.resident_identities) {
         spec.resident_identities.emplace_back(value);
     }
-    const auto copy_pairs =
-        [](std::span<const std::string_view> identities, std::span<const std::string_view> bindings,
-           std::vector<std::string>& out_identities, std::vector<std::string>& out_bindings) {
-            out_identities.reserve(identities.size());
-            out_bindings.reserve(bindings.size());
-            for (const std::string_view value : identities)
-                out_identities.emplace_back(value);
-            for (const std::string_view value : bindings)
-                out_bindings.emplace_back(value);
-        };
-    copy_pairs(config.activation_import_identities, config.activation_import_bindings,
-               spec.import_identities, spec.import_bindings);
-    copy_pairs(config.activation_export_identities, config.activation_export_bindings,
-               spec.export_identities, spec.export_bindings);
+    const auto owned = [](std::span<const std::string_view> values) {
+        std::vector<std::string> copy;
+        copy.reserve(values.size());
+        std::ranges::transform(values, std::back_inserter(copy),
+                               [](std::string_view value) { return std::string{value}; });
+        return copy;
+    };
+    spec.import_identities = owned(config.activation_import_identities);
+    spec.import_bindings = owned(config.activation_import_bindings);
+    spec.export_identities = owned(config.activation_export_identities);
+    spec.export_bindings = owned(config.activation_export_bindings);
     return spec;
 }
 
