@@ -191,7 +191,9 @@ if(SKIPPY_API_BUILD_BENCHMARKS)
 
   # Old C ABI (skippy.h) against the facade, in one process on one llama build.
   # Needs the backend, since the C ABI lives inside the llama target.
-  option(SKIPPY_API_BUILD_FFI_BENCHMARKS
+  option(SKIPPY_API_BUILD_PLANNER_PROBE
+  "Build the stage planner probe (needs SKIPPY_BUILD_LLAMA)" OFF)
+option(SKIPPY_API_BUILD_FFI_BENCHMARKS
     "Build the old C ABI vs skippy_api benchmark (requires the llama backend)" OFF)
 
   if(SKIPPY_API_BUILD_FFI_BENCHMARKS)
@@ -212,6 +214,15 @@ if(SKIPPY_API_BUILD_BENCHMARKS)
         PRIVATE Skippy::Api benchmark::benchmark
       )
   endif()
+endif()
+
+if(SKIPPY_API_BUILD_PLANNER_PROBE)
+  if(NOT SKIPPY_BUILD_LLAMA)
+    message(FATAL_ERROR "SKIPPY_API_BUILD_PLANNER_PROBE needs SKIPPY_BUILD_LLAMA=ON")
+  endif()
+  add_executable(skippy_api_planner_probe tools/gguf_planner_probe.cpp)
+  target_link_libraries(skippy_api_planner_probe PRIVATE Skippy::Api)
+  target_compile_options(skippy_api_planner_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 find_program(SKIPPY_CLANG_FORMAT_EXE NAMES clang-format)
