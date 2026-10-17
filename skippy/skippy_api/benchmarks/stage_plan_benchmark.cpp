@@ -134,7 +134,7 @@ public:
     [[nodiscard]] std::size_t materialize_native() const;
     [[nodiscard]] std::size_t materialize_api() const;
 
-private:
+public:
     LayerRange range_;
     std::vector<skippy::probe::TensorInfo> tensors_;
     std::vector<std::string> ids_;
@@ -142,10 +142,129 @@ private:
     std::vector<skippy_stage_planner_tensor_v1> native_tensors_;
     std::vector<skippy_stage_planner_profile_v1> native_profiles_;
     std::string package_;
+    /// Realizes once so materialization can be measured on its own.
+    void cache_plan(bool use_api) {
+        if (use_api) {
+            auto plan = api_->realize(range_);
+            if (plan) cached_api_ = std::move(*plan);
+            return;
+        }
+        skippy_error* error = nullptr;
+        if (skippy_stage_planner_realize_v1(native_, range_.start, range_.end, &cached_native_,
+                                            &error) != SKIPPY_STATUS_OK) {
+            if (error != nullptr) skippy_error_free(error);
+        }
+    }
+
+    /// Realize and free, the only work both sides share.
+    std::size_t realize_only(bool use_api) {
+        if (use_api) {
+            auto plan = api_->realize(range_);
+            return plan ? 1 : 0;
+        }
+        skippy_stage_plan* plan = nullptr;
+        skippy_error* error = nullptr;
+        if (skippy_stage_planner_realize_v1(native_, range_.start, range_.end, &plan, &error) !=
+            SKIPPY_STATUS_OK) {
+            if (error != nullptr) skippy_error_free(error);
+            return 0;
+        }
+        skippy_stage_plan_free(plan);
+        return 1;
+    }
+
+    /// Materializes a plan that was already realized.
+    std::size_t materialize_cached(bool use_api) {
+        if (use_api) {
+            if (!cached_api_.has_value()) return 0;
+            auto materialized = cached_api_->materialize();
+            if (!materialized) return 0;
+            std::size_t total = materialized->execution_contract.size();
+            for (const auto& profile : materialized->profiles) {
+                total += profile.activation_imports.size() + profile.activation_exports.size() +
+                         profile.state_effects.size();
+            }
+            return total + materialized->resident_identities.size();
+        }
+        return materialize_native_plan(cached_native_);
+    }
+
+    std::size_t materialize_native_plan(skippy_stage_plan* plan) const;
+
+public:
     skippy_stage_planner* native_ = nullptr;
     std::optional<StagePlanner> api_;
+    skippy_stage_plan* cached_native_ = nullptr;
+    std::optional<StagePlanHandle> cached_api_;
     bool ready_ = false;
 };
+
+std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const {
+    if (plan == nullptr) return 0;
+    skippy_error* error = nullptr;
+    skippy_stage_plan_desc_v1 desc{};
+    desc.abi_version = SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION;
+    desc.struct_size = sizeof(desc);
+    if (skippy_stage_plan_describe_v1(plan, &desc, &error) != SKIPPY_STATUS_OK) {
+        if (error != nullptr) skippy_error_free(error);
+        return 0;
+    }
+    // Retain what is read: the facade builds owned values, so a getter loop
+    // that throws its strings away would compare unlike work.
+    std::size_t total = 0;
+    std::vector<std::string> retained;
+    const auto read = [&](skippy_stage_plan_string_ref_v1 reference) {
+        const char* data = nullptr;
+        std::size_t length = 0;
+        if (skippy_stage_plan_string_v1(plan, reference, &data, &length, &error) !=
+            SKIPPY_STATUS_OK) {
+            skippy_error_free(error);
+            return;
+        }
+        retained.emplace_back(data, length);
+        total += length;
+    };
+    read(desc.package_id);
+    read(desc.plan_id);
+    read(desc.execution_contract);
+    for (std::size_t resident = 0; resident < desc.resident_tensor_count; ++resident) {
+        skippy_stage_plan_value_desc_v1 value{};
+        value.abi_version = SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION;
+        value.struct_size = sizeof(value);
+        if (skippy_stage_plan_resident_tensor_at_v1(plan, resident, &value, &error) !=
+            SKIPPY_STATUS_OK) {
+            skippy_error_free(error);
+            return total;
+        }
+        read(value.identity);
+    }
+    for (std::size_t index = 0; index < desc.profile_count; ++index) {
+        skippy_stage_plan_profile_desc_v1 profile{};
+        profile.abi_version = SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION;
+        profile.struct_size = sizeof(profile);
+        if (skippy_stage_plan_profile_at_v1(plan, index, &profile, &error) != SKIPPY_STATUS_OK) {
+            skippy_error_free(error);
+            return total;
+        }
+        const auto read_values = [&](skippy_stage_plan_value_kind kind, std::uint64_t count) {
+            for (std::size_t slot = 0; slot < count; ++slot) {
+                skippy_stage_plan_value_desc_v1 value{};
+                value.abi_version = SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION;
+                value.struct_size = sizeof(value);
+                if (skippy_stage_plan_value_at_v1(plan, index, kind, slot, &value, &error) ==
+                    SKIPPY_STATUS_OK) {
+                    read(value.identity);
+                } else if (error != nullptr) {
+                    skippy_error_free(error);
+                }
+            }
+        };
+        read_values(SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_IMPORT, profile.activation_import_count);
+        read_values(SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_EXPORT, profile.activation_export_count);
+    }
+    benchmark::DoNotOptimize(retained);
+    return total;
+}
 
 std::size_t StageHarness::materialize_native() const {
     skippy_stage_plan* plan = nullptr;
@@ -165,8 +284,10 @@ std::size_t StageHarness::materialize_native() const {
         return 0;
     }
 
+    // Retain what is read: the facade builds owned values, so a getter loop
+    // that throws its strings away would compare unlike work.
     std::size_t total = 0;
-    std::string scratch;
+    std::vector<std::string> retained;
     const auto read = [&](skippy_stage_plan_string_ref_v1 reference) {
         const char* data = nullptr;
         std::size_t length = 0;
@@ -175,8 +296,8 @@ std::size_t StageHarness::materialize_native() const {
             skippy_error_free(error);
             return;
         }
-        scratch.assign(data, length);
-        total += scratch.size();
+        retained.emplace_back(data, length);
+        total += length;
     };
     read(desc.package_id);
     read(desc.plan_id);
@@ -264,33 +385,49 @@ std::size_t StageHarness::materialize_api() const {
     return total;
 }
 
-void run(benchmark::State& state, bool use_api) {
+} // namespace
+
+void realize(benchmark::State& state, bool use_api) {
     const std::string path = model_path();
     if (path.empty()) {
         state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
         return;
     }
-    StageHarness harness(path, LayerRange{0, 0});
+    StageHarness harness(path, LayerRange{0, static_cast<std::int32_t>(state.range(0))});
     if (!harness.ready()) {
         state.SkipWithError("planner setup failed");
         return;
     }
-    // Realize the whole model so both sides do the same work.
-    StageHarness scoped(path, LayerRange{0, static_cast<std::int32_t>(state.range(0))});
-    if (!scoped.ready()) {
-        state.SkipWithError("planner setup failed");
-        return;
-    }
     for (auto _ : state) {
-        std::size_t produced = use_api ? scoped.materialize_api() : scoped.materialize_native();
+        std::size_t produced = harness.realize_only(use_api);
         benchmark::DoNotOptimize(&produced);
     }
 }
 
-void stage_plan_ffi(benchmark::State& state) { run(state, false); }
-void stage_plan_api(benchmark::State& state) { run(state, true); }
+void materialize(benchmark::State& state, bool use_api) {
+    const std::string path = model_path();
+    if (path.empty()) {
+        state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
+        return;
+    }
+    StageHarness harness(path, LayerRange{0, static_cast<std::int32_t>(state.range(0))});
+    if (!harness.ready()) {
+        state.SkipWithError("planner setup failed");
+        return;
+    }
+    harness.cache_plan(use_api);
+    for (auto _ : state) {
+        std::size_t produced = harness.materialize_cached(use_api);
+        benchmark::DoNotOptimize(&produced);
+    }
+}
 
-} // namespace
+void stage_realize_ffi(benchmark::State& state) { realize(state, false); }
+void stage_realize_api(benchmark::State& state) { realize(state, true); }
+void stage_materialize_ffi(benchmark::State& state) { materialize(state, false); }
+void stage_materialize_api(benchmark::State& state) { materialize(state, true); }
 
-BENCHMARK(stage_plan_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
-BENCHMARK(stage_plan_api)->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_realize_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_realize_api)->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_materialize_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_materialize_api)->Arg(6)->Unit(benchmark::kMicrosecond);
