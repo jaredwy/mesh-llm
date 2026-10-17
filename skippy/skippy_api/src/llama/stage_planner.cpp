@@ -57,6 +57,80 @@ std::expected<std::string, PlanFailure> read_string(const skippy_stage_plan& pla
     return std::string{data, length};
 }
 
+StateKind state_kind_of(std::int32_t value) noexcept {
+    switch (value) {
+    case SKIPPY_STAGE_PLAN_STATE_KV_KEY: return StateKind::KvKey;
+    case SKIPPY_STAGE_PLAN_STATE_KV_VALUE: return StateKind::KvValue;
+    case SKIPPY_STAGE_PLAN_STATE_RECURRENT_CONV: return StateKind::RecurrentConvolution;
+    case SKIPPY_STAGE_PLAN_STATE_RECURRENT_SSM: return StateKind::RecurrentSsm;
+    default: return StateKind::KvKey;
+    }
+}
+
+StateAccess access_of(std::int32_t value) noexcept {
+    return value == SKIPPY_STAGE_PLAN_STATE_WRITE ? StateAccess::Write : StateAccess::Read;
+}
+
+StateResidency residency_of(std::int32_t value) noexcept {
+    return value == SKIPPY_STAGE_PLAN_STATE_PER_STAGE ? StateResidency::PerStage
+                                                      : StateResidency::LayerLocal;
+}
+
+std::expected<std::vector<FrontierValue>, PlanFailure>
+read_values(const skippy_stage_plan& plan, std::size_t profile_index,
+            skippy_stage_plan_value_kind kind, std::uint64_t count) {
+    std::vector<FrontierValue> values;
+    values.reserve(static_cast<std::size_t>(count));
+    for (const std::size_t index :
+         std::views::iota(std::size_t{0}, static_cast<std::size_t>(count))) {
+        skippy_stage_plan_value_desc_v1 desc{};
+        desc.abi_version = SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION;
+        desc.struct_size = sizeof(desc);
+        ErrorSlot error;
+        const auto status =
+            skippy_stage_plan_value_at_v1(&plan, profile_index, kind, index, &desc, &error.raw);
+        if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
+
+        auto identity = read_string(plan, desc.identity);
+        if (!identity.has_value()) return std::unexpected(identity.error());
+        auto binding = read_string(plan, desc.binding);
+        if (!binding.has_value()) return std::unexpected(binding.error());
+        values.push_back(FrontierValue{
+            .identity = ValueIdentity{std::move(*identity)},
+            .binding = ValueBinding{std::move(*binding)},
+        });
+    }
+    return values;
+}
+
+std::expected<std::vector<StateEffect>, PlanFailure>
+read_states(const skippy_stage_plan& plan, std::size_t profile_index, std::uint64_t count) {
+    std::vector<StateEffect> effects;
+    effects.reserve(static_cast<std::size_t>(count));
+    for (const std::size_t index :
+         std::views::iota(std::size_t{0}, static_cast<std::size_t>(count))) {
+        skippy_stage_plan_state_desc_v1 desc{};
+        desc.abi_version = SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION;
+        desc.struct_size = sizeof(desc);
+        ErrorSlot error;
+        const auto status =
+            skippy_stage_plan_state_at_v1(&plan, profile_index, index, &desc, &error.raw);
+        if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
+
+        auto identity = read_string(plan, desc.identity);
+        if (!identity.has_value()) return std::unexpected(identity.error());
+        effects.push_back(StateEffect{
+            .identity = ValueIdentity{std::move(*identity)},
+            .kind = state_kind_of(desc.kind),
+            .access = access_of(desc.access),
+            .layer = desc.layer,
+            .residency = residency_of(desc.residency),
+            .write_ordinal = desc.write_ordinal,
+        });
+    }
+    return effects;
+}
+
 std::expected<skippy_stage_plan_desc_v1, PlanFailure> describe(const skippy_stage_plan& plan) {
     skippy_stage_plan_desc_v1 desc{};
     desc.abi_version = SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION;
@@ -189,12 +263,69 @@ std::expected<LayerRange, PlanFailure> StagePlanHandle::range() const {
     return LayerRange{.start = desc->layer_start, .end = desc->layer_end};
 }
 
+std::expected<PlanProfile, PlanFailure> materialize_profile(const skippy_stage_plan& plan,
+                                                            std::size_t index, LayerRange range) {
+    skippy_stage_plan_profile_desc_v1 desc{};
+    desc.abi_version = SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION;
+    desc.struct_size = sizeof(desc);
+    ErrorSlot error;
+    const auto status = skippy_stage_plan_profile_at_v1(&plan, index, &desc, &error.raw);
+    if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
+
+    PlanProfile profile;
+    profile.tokens = desc.n_tokens;
+    profile.sequences = desc.n_sequences;
+    profile.outputs = desc.n_outputs;
+    profile.recurrent_rollback_sequences = desc.n_recurrent_rollback_sequences;
+    profile.slice_range = range;
+
+    const auto assign = [&](skippy_stage_plan_string_ref_v1 reference, auto& target) {
+        auto text = read_string(plan, reference);
+        if (!text.has_value()) return false;
+        target.value = std::move(*text);
+        return true;
+    };
+    const bool identities_ok = assign(desc.profile_id, profile.id) &&
+                               assign(desc.graph_identity, profile.graph_identity) &&
+                               assign(desc.profile_identity, profile.profile_identity) &&
+                               assign(desc.slice_identity, profile.slice_identity) &&
+                               assign(desc.source_snapshot_identity, profile.source_snapshot) &&
+                               assign(desc.graph_configuration_id, profile.graph_configuration) &&
+                               assign(desc.backend_id, profile.backend);
+    if (!identities_ok) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::BackendFailed,
+            .message = "plan profile identity is unreadable",
+        });
+    }
+
+    // These are patch 0004's per-family annotations as the facade sees them:
+    // which state a stage touches, and what crosses its boundary.
+    auto imports = read_values(plan, index, SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_IMPORT,
+                               desc.activation_import_count);
+    if (!imports.has_value()) return std::unexpected(imports.error());
+    profile.activation_imports = std::move(*imports);
+
+    auto exports = read_values(plan, index, SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_EXPORT,
+                               desc.activation_export_count);
+    if (!exports.has_value()) return std::unexpected(exports.error());
+    profile.activation_exports = std::move(*exports);
+
+    auto inputs =
+        read_values(plan, index, SKIPPY_STAGE_PLAN_VALUE_REQUEST_INPUT, desc.request_input_count);
+    if (!inputs.has_value()) return std::unexpected(inputs.error());
+    profile.request_inputs = std::move(*inputs);
+
+    auto effects = read_states(plan, index, desc.state_effect_count);
+    if (!effects.has_value()) return std::unexpected(effects.error());
+    profile.state_effects = std::move(*effects);
+    return profile;
+}
+
 std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
     if (plan_ == nullptr) {
-        return std::unexpected(PlanFailure{
-            .code = PlanError::Rejected,
-            .message = "plan is not loaded",
-        });
+        return std::unexpected(
+            PlanFailure{.code = PlanError::Rejected, .message = "plan is not loaded"});
     }
     const auto desc = describe(*plan_);
     if (!desc.has_value()) return std::unexpected(desc.error());
@@ -233,47 +364,14 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
     const auto profile_count = static_cast<std::size_t>(desc->profile_count);
     plan.profiles.reserve(profile_count);
     for (const std::size_t index : std::views::iota(std::size_t{0}, profile_count)) {
-        skippy_stage_plan_profile_desc_v1 profile{};
-        profile.abi_version = SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION;
-        profile.struct_size = sizeof(profile);
-        ErrorSlot error;
-        const auto status =
-            skippy_stage_plan_profile_at_v1(plan_.get(), index, &profile, &error.raw);
-        if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
-
-        PlanProfile entry;
-        entry.tokens = profile.n_tokens;
-        entry.sequences = profile.n_sequences;
-        entry.outputs = profile.n_outputs;
-        entry.recurrent_rollback_sequences = profile.n_recurrent_rollback_sequences;
-        entry.slice_range = LayerRange{.start = desc->layer_start, .end = desc->layer_end};
-
-        const auto assign = [&](skippy_stage_plan_string_ref_v1 reference, auto&& target) {
-            auto text = read_string(*plan_, reference);
-            if (!text.has_value()) return false;
-            target.value = std::move(*text);
-            return true;
-        };
-        if (!assign(profile.profile_id, entry.id) ||
-            !assign(profile.graph_identity, entry.graph_identity) ||
-            !assign(profile.profile_identity, entry.profile_identity) ||
-            !assign(profile.slice_identity, entry.slice_identity) ||
-            !assign(profile.source_snapshot_identity, entry.source_snapshot) ||
-            !assign(profile.graph_configuration_id, entry.graph_configuration) ||
-            !assign(profile.backend_id, entry.backend)) {
-            return std::unexpected(PlanFailure{
-                .code = PlanError::BackendFailed,
-                .message = "plan profile identity is unreadable",
-            });
-        }
-        plan.profiles.push_back(std::move(entry));
+        auto profile = materialize_profile(*plan_, index, plan.range);
+        if (!profile.has_value()) return std::unexpected(profile.error());
+        plan.profiles.push_back(std::move(*profile));
     }
 
     if (auto valid = validate(plan); !valid.has_value()) {
-        return std::unexpected(PlanFailure{
-            .code = valid.error(),
-            .message = "materialized plan is invalid",
-        });
+        return std::unexpected(
+            PlanFailure{.code = valid.error(), .message = "materialized plan is invalid"});
     }
     return plan;
 }

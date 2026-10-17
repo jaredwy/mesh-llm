@@ -52,6 +52,38 @@ std::expected<void, PlanFailure> validate_inputs(const StagePlannerInputs& input
     return {};
 }
 
+std::expected<PlanSemantics, PlanError> summarize(const StagePlan& plan, const ProfileId& profile) {
+    const auto found = std::ranges::find_if(
+        plan.profiles, [&](const PlanProfile& entry) { return entry.id == profile; });
+    if (found == plan.profiles.end()) return std::unexpected(PlanError::ProfileIdentityMismatch);
+
+    PlanSemantics semantics;
+    for (const StateEffect& effect : found->state_effects) {
+        if (std::ranges::find(semantics.state_kinds, effect.kind) == semantics.state_kinds.end()) {
+            semantics.state_kinds.push_back(effect.kind);
+        }
+        if (effect.kind == StateKind::RecurrentConvolution ||
+            effect.kind == StateKind::RecurrentSsm) {
+            semantics.recurrent = true;
+        }
+        if (effect.access == StateAccess::Write) ++semantics.written;
+        semantics.first_layer = semantics.first_layer < 0
+                                    ? effect.layer
+                                    : std::min(semantics.first_layer, effect.layer);
+        semantics.last_layer = std::max(semantics.last_layer, effect.layer);
+    }
+    std::ranges::sort(semantics.state_kinds);
+    semantics.frontier_values = found->activation_imports.size() + found->activation_exports.size();
+    return semantics;
+}
+
+std::vector<StateEffect> state_effects_at(const PlanProfile& profile, std::int32_t layer) {
+    std::vector<StateEffect> effects;
+    std::ranges::copy_if(profile.state_effects, std::back_inserter(effects),
+                         [layer](const StateEffect& effect) { return effect.layer == layer; });
+    return effects;
+}
+
 std::expected<void, PlanError> validate(const StagePlan& plan) {
     if (plan.layer_count <= 0 || plan.range.start < 0 || plan.range.start >= plan.range.end ||
         plan.range.end > plan.layer_count) {

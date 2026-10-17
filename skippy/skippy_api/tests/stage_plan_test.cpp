@@ -17,6 +17,10 @@ using skippy::ProfileId;
 using skippy::ProfileSpec;
 using skippy::StagePlan;
 using skippy::StagePlannerInputs;
+using skippy::StateAccess;
+using skippy::StateEffect;
+using skippy::StateKind;
+using skippy::StateResidency;
 using skippy::ValueIdentity;
 
 std::vector<FrontierValue> to_values(const std::vector<ValueIdentity>& identities) {
@@ -185,6 +189,86 @@ TEST(StagePlanChain, AcceptsAThreeStageChain) {
     const std::vector<StagePlan> chain{first, middle, last};
     EXPECT_TRUE(skippy::validate_chain(chain).has_value());
     EXPECT_TRUE(last.terminal());
+}
+
+namespace {
+
+StateEffect effect(StateKind kind, StateAccess access, std::int32_t layer,
+                   StateResidency residency = StateResidency::LayerLocal) {
+    return StateEffect{.identity = ValueIdentity{"state"},
+                       .kind = kind,
+                       .access = access,
+                       .layer = layer,
+                       .residency = residency,
+                       .write_ordinal = 0};
+}
+
+StagePlan with_states(std::vector<StateEffect> effects, std::size_t imports = 0,
+                      std::size_t exports = 0) {
+    StagePlan value = plan({0, 6}, 6, {});
+    PlanProfile entry = profile({0, 6}, {}, {});
+    entry.state_effects = std::move(effects);
+    for (std::size_t index = 0; index < imports; ++index) {
+        entry.activation_imports.push_back(
+            FrontierValue{.identity = ValueIdentity{"in"}, .binding = {}});
+    }
+    for (std::size_t index = 0; index < exports; ++index) {
+        entry.activation_exports.push_back(
+            FrontierValue{.identity = ValueIdentity{"out"}, .binding = {}});
+    }
+    value.profiles.push_back(std::move(entry));
+    return value;
+}
+
+} // namespace
+
+TEST(StagePlanSemantics, SummarizesKvEffectsPerLayer) {
+    StagePlan value = with_states({effect(StateKind::KvKey, StateAccess::Write, 0),
+                                   effect(StateKind::KvValue, StateAccess::Write, 0),
+                                   effect(StateKind::KvKey, StateAccess::Write, 5)});
+    const auto semantics = skippy::summarize(value, ProfileId{"decode"});
+    ASSERT_TRUE(semantics.has_value());
+    EXPECT_EQ(semantics->state_kinds.size(), 2U);
+    EXPECT_FALSE(semantics->recurrent);
+    EXPECT_EQ(semantics->first_layer, 0);
+    EXPECT_EQ(semantics->last_layer, 5);
+    EXPECT_EQ(semantics->written, 3U);
+}
+
+TEST(StagePlanSemantics, RecurrenTStateIsRecognisedByKindNotByFamily) {
+    StagePlan value = with_states({effect(StateKind::RecurrentSsm, StateAccess::Write, 2),
+                                   effect(StateKind::KvKey, StateAccess::Read, 2)});
+    const auto semantics = skippy::summarize(value, ProfileId{"decode"});
+    ASSERT_TRUE(semantics.has_value());
+    EXPECT_TRUE(semantics->recurrent);
+    EXPECT_EQ(semantics->written, 1U);
+}
+
+TEST(StagePlanSemantics, CountsFrontierValuesBothWays) {
+    StagePlan value = with_states({}, 2, 1);
+    const auto semantics = skippy::summarize(value, ProfileId{"decode"});
+    ASSERT_TRUE(semantics.has_value());
+    EXPECT_EQ(semantics->frontier_values, 3U);
+    EXPECT_EQ(semantics->first_layer, -1);
+}
+
+TEST(StagePlanSemantics, AnUnknownProfileIsRejected) {
+    StagePlan value = with_states({});
+    EXPECT_EQ(skippy::summarize(value, ProfileId{"absent"}).error(),
+              PlanError::ProfileIdentityMismatch);
+}
+
+TEST(StagePlanSemantics, StateEffectsAreFilteredByLayerInPlanOrder) {
+    PlanProfile entry = profile({0, 6}, {}, {});
+    entry.state_effects = {effect(StateKind::KvKey, StateAccess::Write, 1),
+                           effect(StateKind::KvValue, StateAccess::Write, 1),
+                           effect(StateKind::KvKey, StateAccess::Write, 2)};
+
+    const std::vector<StateEffect> layer_one = skippy::state_effects_at(entry, 1);
+    ASSERT_EQ(layer_one.size(), 2U);
+    EXPECT_EQ(layer_one[0].kind, StateKind::KvKey);
+    EXPECT_EQ(layer_one[1].kind, StateKind::KvValue);
+    EXPECT_TRUE(skippy::state_effects_at(entry, 4).empty());
 }
 
 TEST(StagePlannerInputs, RejectsAPlannerWithoutShards) {

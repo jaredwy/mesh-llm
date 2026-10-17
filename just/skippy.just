@@ -295,6 +295,21 @@ skippy-llama-api-ffi-bench-compare model="" *ARGS="":
       "$@" >/dev/null
     python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$report"
 
+# Stage planner probe: proves a GGUF is a valid single-shard package and prints
+# what planning costs. Optional layer count and [start, end) stage range.
+[unix]
+[positional-arguments]
+skippy-llama-api-planner-probe model *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="target/skippy-planner-probe"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DSKIPPY_API_BUILD_PLANNER_PROBE=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --target skippy_api_planner_probe --parallel
+    "$build_dir/skippy_api_planner_probe" "$@"
+
 # Everything a skippy_api/skippy-api-rs checkpoint must pass.
 # Models are optional; pass both to include the real-model Rust tests.
 [unix]

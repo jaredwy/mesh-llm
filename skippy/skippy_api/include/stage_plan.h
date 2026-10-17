@@ -196,6 +196,33 @@ struct PlanFailure {
     std::string message;
 };
 
+/// What a plan's state effects say about the stage, without naming a family.
+///
+/// This is the facade's reading of the per-model graph semantics: a stage that
+/// touches recurrent SSM state is recurrent whatever architecture produced it.
+struct PlanSemantics {
+    /// Distinct state kinds this stage touches, in ascending enum order.
+    std::vector<StateKind> state_kinds;
+    /// True when any layer holds recurrent (convolution or SSM) state.
+    bool recurrent = false;
+    /// Lowest and highest layer with a state effect; -1 when there are none.
+    std::int32_t first_layer = -1;
+    std::int32_t last_layer = -1;
+    /// State effects that are written, not just read.
+    std::size_t written = 0;
+    /// Values crossing a stage boundary in either direction.
+    std::size_t frontier_values = 0;
+};
+
+/// Summarizes one profile's semantics; the plan must have exactly one profile
+/// for this to be unambiguous.
+[[nodiscard]] std::expected<PlanSemantics, PlanError> summarize(const StagePlan& plan,
+                                                                const ProfileId& profile);
+
+/// State effects of one profile at one layer, in plan order.
+[[nodiscard]] std::vector<StateEffect> state_effects_at(const PlanProfile& profile,
+                                                        std::int32_t layer);
+
 /// Exact package tensor binding the planner needs.
 struct PackageTensor {
     TensorId id;

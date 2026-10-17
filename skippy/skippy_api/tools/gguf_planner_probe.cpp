@@ -316,7 +316,13 @@ int main(int argc, char ** argv) {
     inputs.package = skippy::PackageId{sha256_of(path)};
     inputs.shard_paths = {path};
     inputs.tensors = std::move(tensors);
-    inputs.profiles = {skippy::ProfileSpec{.id = skippy::ProfileId{"embed"},
+    // "decode" touches KV state, "embed" does not; asking for both shows the
+    // per-family state annotations that patch 0004 added.
+    inputs.profiles = {skippy::ProfileSpec{.id = skippy::ProfileId{"decode"},
+                                           .tokens = 512,
+                                           .sequences = 1,
+                                           .outputs = 1},
+                       skippy::ProfileSpec{.id = skippy::ProfileId{"embed"},
                                            .tokens = 512,
                                            .sequences = 1,
                                            .outputs = 512}};
@@ -342,7 +348,9 @@ int main(int argc, char ** argv) {
     double realize_ms = 0.0;
     auto plan = std::expected<skippy::llama::StagePlanHandle, skippy::PlanFailure>{};
     realize_ms = milliseconds([&] {
-        plan = planner.realize(skippy::LayerRange{0, static_cast<std::int32_t>(layers)});
+        const auto start = argc > 3 ? std::stoi(argv[3]) : 0;
+        const auto end = argc > 4 ? std::stoi(argv[4]) : static_cast<std::int32_t>(layers);
+        plan = planner.realize(skippy::LayerRange{start, end});
     });
     if (!plan) {
         std::cerr << "realize rejected: " << plan.error().message << "\n";
@@ -371,6 +379,16 @@ int main(int argc, char ** argv) {
     std::cout << "materialized: " << materialized->profiles.size() << " profiles, "
               << materialized->resident_tensors.size() << " resident tensors, "
               << materialized->execution_contract.size() << " contract bytes\n";
+
+    for (const skippy::PlanProfile & profile : materialized->profiles) {
+        const auto semantics = skippy::summarize(*materialized, profile.id);
+        if (!semantics) continue;
+        std::cout << "profile " << profile.id.value << ": " << profile.state_effects.size()
+                  << " state effects, " << semantics->written << " written, layers ["
+                  << semantics->first_layer << ", " << semantics->last_layer << "], recurrent="
+                  << (semantics->recurrent ? "yes" : "no") << ", frontier="
+                  << semantics->frontier_values << "\n";
+    }
 
     const double describe_us = microseconds(1000, [&] {
         const auto value = plan->range();

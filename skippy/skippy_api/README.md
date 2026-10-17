@@ -51,6 +51,22 @@ Real-model behaviour is covered from the Rust side, not here:
 just skippy-api-rs-e2e <embed.gguf> <reranker.gguf>
 ```
 
+## Stage planning
+
+`stage_plan.h` owns the typed plan model and its rules; `llama/stage_planner.h`
+wraps the native planner and copies nothing until a caller asks. A plan carries
+the per-family state annotations as data, so callers never branch on
+architecture:
+
+```bash
+just skippy-llama-api-planner-probe <model.gguf> [layers] [start] [end]
+```
+
+On Qwen2.5-0.5B (24 layers, whole model) that reports 96 state effects, 48 of
+them writes, across layers 0-23, `recurrent=false`. Same model, stage `[0,12)`:
+48 effects and a frontier of 1 value. BERT-family models report no state
+effects at all — they hold no KV — which is the correct answer, not a gap.
+
 ## Checkpoint workflow
 
 ```bash
