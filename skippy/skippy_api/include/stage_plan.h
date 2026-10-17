@@ -16,6 +16,7 @@
  * `[start, end)`.
  */
 
+#include <array>
 #include <cstdint>
 #include <expected>
 #include <span>
@@ -164,6 +165,15 @@ struct StagePlan {
     [[nodiscard]] bool terminal() const noexcept { return range.end == layer_count; }
 };
 
+/// What a caller asks the planner to guard for one execution profile.
+struct ProfileSpec {
+    ProfileId id;
+    std::uint32_t tokens = 0;
+    std::uint32_t sequences = 1;
+    std::uint32_t outputs = 0;
+    std::uint32_t recurrent_rollback_sequences = 0;
+};
+
 /// Why a plan, or a chain of plans, is not usable.
 enum class PlanError : std::uint8_t {
     EmptyChain,
@@ -174,7 +184,42 @@ enum class PlanError : std::uint8_t {
     ProfileCountMismatch,
     ProfileIdentityMismatch,
     ActivationFrontierMismatch,
+    /// The backend refused the request; `PlanFailure::message` says why.
+    Rejected,
+    /// The backend failed after accepting the request.
+    BackendFailed,
 };
+
+/// A plan error plus the backend's explanation, when there is one.
+struct PlanFailure {
+    PlanError code = PlanError::BackendFailed;
+    std::string message;
+};
+
+/// Exact package tensor binding the planner needs.
+struct PackageTensor {
+    TensorId id;
+    std::string native_name;
+    std::int32_t ggml_type = 0;
+    std::uint32_t dimension_count = 0;
+    std::array<std::int64_t, 4> dimensions{};
+    std::uint32_t split_no = 0;
+    std::uint64_t data_offset = 0;
+    std::uint64_t stored_length = 0;
+};
+
+/// Everything a planner needs to build a metadata-only model.
+struct StagePlannerInputs {
+    PackageId package;
+    std::vector<std::string> shard_paths;
+    std::vector<PackageTensor> tensors;
+    std::vector<ProfileSpec> profiles;
+    GraphConfigurationId graph_configuration;
+    BackendId backend;
+};
+
+/// Rejects inputs no planner could use, before any backend work starts.
+[[nodiscard]] std::expected<void, PlanFailure> validate_inputs(const StagePlannerInputs& inputs);
 
 /// Checks one plan on its own: range is non-empty and inside the model.
 [[nodiscard]] std::expected<void, PlanError> validate(const StagePlan& plan);

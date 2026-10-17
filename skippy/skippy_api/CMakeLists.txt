@@ -110,6 +110,7 @@ if(SKIPPY_BUILD_LLAMA)
   add_library(skippy_llama STATIC
     src/llama/backend.cpp
     src/llama/batch.cpp
+    src/llama/stage_planner.cpp
     )
   add_library(Skippy::Llama ALIAS skippy_llama)
   target_compile_options(skippy_llama PRIVATE -Wall -Wextra -Wpedantic -Werror)

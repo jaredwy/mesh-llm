@@ -30,6 +30,28 @@ std::vector<ValueIdentity> PlanProfile::export_identities() const {
     return identities_of(activation_exports);
 }
 
+std::expected<void, PlanFailure> validate_inputs(const StagePlannerInputs& inputs) {
+    if (inputs.package.empty()) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::PackageMismatch,
+            .message = "package id is empty",
+        });
+    }
+    if (inputs.shard_paths.empty()) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::Rejected,
+            .message = "a planner needs at least one shard",
+        });
+    }
+    if (inputs.profiles.empty()) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::ProfileCountMismatch,
+            .message = "a planner needs at least one profile",
+        });
+    }
+    return {};
+}
+
 std::expected<void, PlanError> validate(const StagePlan& plan) {
     if (plan.layer_count <= 0 || plan.range.start < 0 || plan.range.start >= plan.range.end ||
         plan.range.end > plan.layer_count) {

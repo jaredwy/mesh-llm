@@ -14,7 +14,9 @@ using skippy::PackageId;
 using skippy::PlanError;
 using skippy::PlanProfile;
 using skippy::ProfileId;
+using skippy::ProfileSpec;
 using skippy::StagePlan;
+using skippy::StagePlannerInputs;
 using skippy::ValueIdentity;
 
 std::vector<FrontierValue> to_values(const std::vector<ValueIdentity>& identities) {
@@ -183,6 +185,55 @@ TEST(StagePlanChain, AcceptsAThreeStageChain) {
     const std::vector<StagePlan> chain{first, middle, last};
     EXPECT_TRUE(skippy::validate_chain(chain).has_value());
     EXPECT_TRUE(last.terminal());
+}
+
+TEST(StagePlannerInputs, RejectsAPlannerWithoutShards) {
+    StagePlannerInputs value{
+        .package = PackageId{"package"},
+        .shard_paths = {},
+        .profiles = {ProfileSpec{.id = ProfileId{"decode"}, .tokens = 512}},
+        .graph_configuration = {"graph"},
+        .backend = {"metal"},
+    };
+    const auto valid = skippy::validate_inputs(value);
+    ASSERT_FALSE(valid.has_value());
+    EXPECT_EQ(valid.error().code, PlanError::Rejected);
+    EXPECT_NE(valid.error().message.find("shard"), std::string::npos);
+}
+
+TEST(StagePlannerInputs, RejectsAPlannerWithoutProfiles) {
+    StagePlannerInputs value{
+        .package = PackageId{"package"},
+        .shard_paths = {"shard.gguf"},
+        .profiles = {},
+        .graph_configuration = {"graph"},
+        .backend = {"metal"},
+    };
+    const auto valid = skippy::validate_inputs(value);
+    ASSERT_FALSE(valid.has_value());
+    EXPECT_EQ(valid.error().code, PlanError::ProfileCountMismatch);
+}
+
+TEST(StagePlannerInputs, RejectsAnEmptyPackageIdentity) {
+    StagePlannerInputs value{
+        .package = PackageId{},
+        .shard_paths = {"shard.gguf"},
+        .profiles = {ProfileSpec{.id = ProfileId{"decode"}, .tokens = 512}},
+        .graph_configuration = {"graph"},
+        .backend = {"metal"},
+    };
+    EXPECT_EQ(skippy::validate_inputs(value).error().code, PlanError::PackageMismatch);
+}
+
+TEST(StagePlannerInputs, AcceptsAPlausibleRequest) {
+    StagePlannerInputs value{
+        .package = PackageId{"package"},
+        .shard_paths = {"shard.gguf"},
+        .profiles = {ProfileSpec{.id = ProfileId{"decode"}, .tokens = 512}},
+        .graph_configuration = {"graph"},
+        .backend = {"metal"},
+    };
+    EXPECT_TRUE(skippy::validate_inputs(value).has_value());
 }
 
 TEST(StagePlan, TerminalIsAboutTheLastLayerNotTheLastPlan) {
