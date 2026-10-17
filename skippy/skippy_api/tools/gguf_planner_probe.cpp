@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-#include "gguf_inventory.h"
+#include "llama/model_inventory.h"
 
 namespace {
 

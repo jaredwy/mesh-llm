@@ -1,8 +1,11 @@
 #ifndef SKIPPY_API_TOOLS_GGUF_INVENTORY_H
 #define SKIPPY_API_TOOLS_GGUF_INVENTORY_H
 
-/// Reads a GGUF's tensor inventory straight from the header. Shared by the
-/// planner and pipeline probes so a shape bug shows up once.
+/// Reads a GGUF's tensor inventory straight from the header.
+///
+/// The planner is configured from an exact tensor closure, so anything that
+/// plans a real model needs this map first. It lives beside the llama backend
+/// because the byte size of a tensor is a ggml type property.
 
 #include "ggml.h"
 
@@ -14,9 +17,13 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace skippy::probe {
+
+/// Metadata strings are model names; anything larger is a malformed file.
+constexpr std::uint64_t kMaxMetadataString = 1048576;
 
 struct TensorInfo {
     std::string name;
@@ -49,7 +56,7 @@ public:
     std::expected<std::string, std::string> read_string() {
         std::uint64_t length = 0;
         if (auto ok = read(length); !ok) return std::unexpected(ok.error());
-        if (length > (1U << 20)) return std::unexpected("implausible string length");
+        if (length > kMaxMetadataString) return std::unexpected("implausible string length");
         std::string value(length, '\0');
         file_.read(value.data(), static_cast<std::streamsize>(length));
         if (!file_) return std::unexpected("truncated string");
@@ -61,18 +68,18 @@ private:
 };
 
 // Skips one metadata value of the given GGUF type.
-std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type) {
+inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type) {
     switch (type) {
-    case 0: return reader.skip(1);  // u8
-    case 1: return reader.skip(1);  // i8
-    case 2: return reader.skip(2);  // u16
-    case 3: return reader.skip(2);  // i16
-    case 4: return reader.skip(4);  // u32
-    case 5: return reader.skip(4);  // i32
-    case 6: return reader.skip(4);  // f32
+    case 0:                         // u8
+    case 1:                         // i8
     case 7: return reader.skip(1);  // bool
-    case 10: return reader.skip(8); // u64
-    case 11: return reader.skip(8); // i64
+    case 2:                         // u16
+    case 3: return reader.skip(2);  // i16
+    case 4:                         // u32
+    case 5:                         // i32
+    case 6: return reader.skip(4);  // f32
+    case 10:                        // u64
+    case 11:                        // i64
     case 12: return reader.skip(8); // f64
     case 8: {                       // string
         auto value = reader.read_string();
@@ -93,23 +100,9 @@ std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type) 
     }
 }
 
-std::expected<std::vector<TensorInfo>, std::string> read_inventory(const std::string& path) {
-    Reader reader(path);
-    if (!reader.okay()) return std::unexpected("cannot open " + path);
-
-    std::uint32_t magic = 0;
-    std::uint32_t version = 0;
-    std::uint64_t tensor_count = 0;
-    std::uint64_t metadata_count = 0;
-    if (auto ok = reader.read(magic); !ok) return std::unexpected(ok.error());
-    if (magic != 0x46554747U) return std::unexpected("not a GGUF file");
-    if (auto ok = reader.read(version); !ok) return std::unexpected(ok.error());
-    if (version < 2 || version > 3) return std::unexpected("unsupported GGUF version");
-    if (auto ok = reader.read(tensor_count); !ok) return std::unexpected(ok.error());
-    if (auto ok = reader.read(metadata_count); !ok) return std::unexpected(ok.error());
-
-    std::uint64_t alignment = 32;
-    for (std::uint64_t index = 0; index < metadata_count; ++index) {
+inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint64_t count,
+                                                      std::uint64_t& alignment) {
+    for (std::uint64_t index = 0; index < count; ++index) {
         auto key = reader.read_string();
         if (!key) return std::unexpected(key.error());
         std::uint32_t type = 0;
@@ -122,10 +115,14 @@ std::expected<std::vector<TensorInfo>, std::string> read_inventory(const std::st
         }
         if (auto ok = skip_value(reader, type); !ok) return std::unexpected(ok.error());
     }
+    return {};
+}
 
+inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& reader,
+                                                                        std::uint64_t count) {
     std::vector<TensorInfo> tensors;
-    tensors.reserve(static_cast<std::size_t>(tensor_count));
-    for (std::uint64_t index = 0; index < tensor_count; ++index) {
+    tensors.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
         auto name = reader.read_string();
         if (!name) return std::unexpected(name.error());
         TensorInfo info;
@@ -143,26 +140,47 @@ std::expected<std::vector<TensorInfo>, std::string> read_inventory(const std::st
         for (std::uint32_t dim = 1; dim < info.dimension_count; ++dim) {
             info.stored_length *= static_cast<std::uint64_t>(info.dimensions[dim]);
         }
-        if (info.name == "blk.0.attn_k.bias") {
-            std::cout << "probe: " << info.name << " type=" << info.type
-                      << " dims=" << info.dimensions[0] << " offset=" << info.offset
-                      << " stored=" << info.stored_length << "\n";
-        }
         tensors.push_back(std::move(info));
     }
+    return tensors;
+}
+
+inline std::expected<std::vector<TensorInfo>, std::string> read_inventory(const std::string& path) {
+    Reader reader(path);
+    if (!reader.okay()) return std::unexpected("cannot open " + path);
+
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::uint64_t tensor_count = 0;
+    std::uint64_t metadata_count = 0;
+    if (auto ok = reader.read(magic); !ok) return std::unexpected(ok.error());
+    if (magic != 0x46554747U) return std::unexpected("not a GGUF file");
+    if (auto ok = reader.read(version); !ok) return std::unexpected(ok.error());
+    if (version < 2 || version > 3) return std::unexpected("unsupported GGUF version");
+    if (auto ok = reader.read(tensor_count); !ok) return std::unexpected(ok.error());
+    if (auto ok = reader.read(metadata_count); !ok) return std::unexpected(ok.error());
+
+    std::uint64_t alignment = 32;
+    if (auto ok = skip_metadata(reader, metadata_count, alignment); !ok) {
+        return std::unexpected(ok.error());
+    }
+
+    auto tensors = read_tensors(reader, tensor_count);
+    if (!tensors) return std::unexpected(tensors.error());
+
     // The native loader reports absolute file offsets: data section start
     // plus the tensor record's relative offset.
     const std::uint64_t data_start = (reader.tell() + alignment - 1) / alignment * alignment;
-    for (TensorInfo& tensor : tensors) {
+    for (TensorInfo& tensor : *tensors) {
         tensor.offset += data_start;
     }
     // Package tensor ids must be strictly increasing.
-    std::ranges::sort(tensors, {}, &TensorInfo::name);
+    std::ranges::sort(*tensors, {}, &TensorInfo::name);
     return tensors;
 }
 
 // Package identity is the content hash, so the probe hashes the shard.
-std::string sha256_of(const std::string& path) {
+inline std::string sha256_of(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
     std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(file)),
                                    std::istreambuf_iterator<char>());
@@ -178,29 +196,34 @@ std::string sha256_of(const std::string& path) {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
         0xc67178f2,
     };
-    std::array<std::uint32_t, 8> h{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    std::array<std::uint32_t, 8> h{
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    };
     const auto rotr = [](std::uint32_t value, int bits) {
-        return (value >> bits) | (value << (32 - bits));
+        const auto width = static_cast<std::uint32_t>(32 - bits);
+        return (value >> static_cast<std::uint32_t>(bits)) | (value << width);
     };
     const std::uint64_t bit_length = static_cast<std::uint64_t>(data.size()) * 8U;
     data.push_back(0x80);
     while (data.size() % 64 != 56)
         data.push_back(0);
     for (int shift = 56; shift >= 0; shift -= 8) {
-        data.push_back(static_cast<std::uint8_t>(bit_length >> shift));
+        data.push_back(static_cast<std::uint8_t>(bit_length >> static_cast<unsigned>(shift)));
     }
     for (std::size_t block = 0; block < data.size(); block += 64) {
         std::array<std::uint32_t, 64> w{};
         for (std::size_t index = 0; index < 16; ++index) {
-            w[index] = (static_cast<std::uint32_t>(data[block + index * 4]) << 24) |
-                       (static_cast<std::uint32_t>(data[block + index * 4 + 1]) << 16) |
-                       (static_cast<std::uint32_t>(data[block + index * 4 + 2]) << 8) |
-                       static_cast<std::uint32_t>(data[block + index * 4 + 3]);
+            const std::size_t base = block + (index * 4);
+            w[index] = (static_cast<std::uint32_t>(data[base]) << 24U) |
+                       (static_cast<std::uint32_t>(data[base + 1]) << 16U) |
+                       (static_cast<std::uint32_t>(data[base + 2]) << 8U) |
+                       static_cast<std::uint32_t>(data[base + 3]);
         }
         for (std::size_t index = 16; index < 64; ++index) {
-            const auto s0 = rotr(w[index - 15], 7) ^ rotr(w[index - 15], 18) ^ (w[index - 15] >> 3);
-            const auto s1 = rotr(w[index - 2], 17) ^ rotr(w[index - 2], 19) ^ (w[index - 2] >> 10);
+            const auto s0 =
+                rotr(w[index - 15], 7) ^ rotr(w[index - 15], 18) ^ (w[index - 15] >> 3U);
+            const auto s1 = rotr(w[index - 2], 17) ^ rotr(w[index - 2], 19) ^ (w[index - 2] >> 10U);
             w[index] = w[index - 16] + s0 + w[index - 7] + s1;
         }
         auto [a, b, c, d, e, f, g, hh] = h;
@@ -229,17 +252,17 @@ std::string sha256_of(const std::string& path) {
         h[6] += g;
         h[7] += hh;
     }
-    static constexpr char kHex[] = "0123456789abcdef";
+    static constexpr std::string_view kHex = "0123456789abcdef";
     std::string digest = "sha256:";
     for (const std::uint32_t word : h) {
         for (int shift = 28; shift >= 0; shift -= 4) {
-            digest.push_back(kHex[(word >> shift) & 0xfU]);
+            digest.push_back(kHex[(word >> static_cast<unsigned>(shift)) & 0xfU]);
         }
     }
     return digest;
 }
 
-std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
+inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
     std::int64_t layers = 0;
     for (const TensorInfo& tensor : tensors) {
         const auto position = tensor.name.rfind("blk.");

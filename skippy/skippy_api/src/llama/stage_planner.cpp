@@ -1,5 +1,7 @@
 #include "llama/stage_planner.h"
 
+#include "llama/model_inventory.h"
+
 #include <algorithm>
 #include <ranges>
 #include <utility>
@@ -374,6 +376,68 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
             PlanFailure{.code = valid.error(), .message = "materialized plan is invalid"});
     }
     return plan;
+}
+
+std::expected<std::vector<StageLoadConfig>, PlanFailure>
+plan_model_stages(const std::string& path, std::span<const LayerRange> ranges) {
+    if (ranges.empty()) {
+        return std::unexpected(
+            PlanFailure{.code = PlanError::EmptyChain, .message = "no ranges requested"});
+    }
+    auto inventory = probe::read_inventory(path);
+    if (!inventory.has_value()) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::Rejected,
+            .message = inventory.error(),
+        });
+    }
+
+    StagePlannerInputs inputs;
+    inputs.package = PackageId{probe::sha256_of(path)};
+    inputs.shard_paths = {path};
+    inputs.tensors.reserve(inventory->size());
+    for (const probe::TensorInfo& info : *inventory) {
+        inputs.tensors.push_back(PackageTensor{
+            .id = TensorId{info.name},
+            .native_name = info.name,
+            .ggml_type = static_cast<std::int32_t>(info.type),
+            .dimension_count = info.dimension_count,
+            .dimensions = info.dimensions,
+            .split_no = 0,
+            .data_offset = info.offset,
+            .stored_length = info.stored_length,
+        });
+    }
+    // A token budget large enough for any prefill the caller can ask for; the
+    // planner only uses it to size the guarded profile.
+    inputs.profiles = {
+        ProfileSpec{
+            .id = ProfileId{"decode"},
+            .tokens = 512,
+            .sequences = 1,
+            .outputs = 512,
+        },
+    };
+    inputs.graph_configuration = GraphConfigurationId{"stage"};
+    inputs.backend = BackendId{"metal"};
+
+    auto planner = StagePlanner::create(inputs);
+    if (!planner.has_value()) return std::unexpected(planner.error());
+
+    std::vector<StageLoadConfig> configs;
+    configs.reserve(ranges.size());
+    for (const LayerRange range : ranges) {
+        auto plan = planner->realize(range);
+        if (!plan.has_value()) return std::unexpected(plan.error());
+        auto materialized = plan->materialize();
+        if (!materialized.has_value()) return std::unexpected(materialized.error());
+        auto config = stage_load_config(*materialized, materialized->profiles.front().id);
+        if (!config.has_value()) {
+            return std::unexpected(PlanFailure{.code = config.error(), .message = {}});
+        }
+        configs.push_back(std::move(*config));
+    }
+    return configs;
 }
 
 std::expected<void, PlanFailure> validate_chain(std::span<const StagePlanHandle> plans) {

@@ -11,7 +11,7 @@
  * actually has.
  */
 
-#include "gguf_inventory.h"
+#include "llama/model_inventory.h"
 #include "llama/stage_planner.h"
 #include "stage_load.h"
 

@@ -12,6 +12,7 @@
  * caller that only needs the layer range pays one call.
  */
 
+#include "stage_load.h"
 #include "stage_plan.h"
 
 #include "skippy.h"
@@ -79,6 +80,14 @@ public:
 private:
     std::unique_ptr<skippy_stage_planner, StagePlannerDeleter> planner_;
 };
+
+/// Plans `ranges` of `path` and returns each stage's loader configuration.
+///
+/// This is the one entry point a caller needs to split a model: the tensor
+/// inventory, the planner, the plan and the config derivation all happen here,
+/// in one pass, with no intermediate objects to keep alive.
+[[nodiscard]] std::expected<std::vector<StageLoadConfig>, PlanFailure>
+plan_model_stages(const std::string& path, std::span<const LayerRange> ranges);
 
 /// Validates a chain natively, without materializing anything.
 [[nodiscard]] std::expected<void, PlanFailure>

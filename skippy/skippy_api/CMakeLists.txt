@@ -206,6 +206,7 @@ option(SKIPPY_API_BUILD_FFI_BENCHMARKS
 
     add_executable(skippy_api_ffi_benchmarks
         benchmarks/ffi_vs_api_benchmark.cpp
+        benchmarks/stage_plan_benchmark.cpp
       )
     target_compile_options(skippy_api_ffi_benchmarks PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_include_directories(skippy_api_ffi_benchmarks PRIVATE
