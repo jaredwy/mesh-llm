@@ -261,6 +261,20 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
         };
         read_values(SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_IMPORT, profile.activation_import_count);
         read_values(SKIPPY_STAGE_PLAN_VALUE_ACTIVATION_EXPORT, profile.activation_export_count);
+        read_values(SKIPPY_STAGE_PLAN_VALUE_REQUEST_INPUT, profile.request_input_count);
+        // The facade also reads every persistent-state effect, so the getter
+        // loop must too or the row compares unlike work.
+        for (std::size_t effect = 0; effect < profile.state_effect_count; ++effect) {
+            skippy_stage_plan_state_desc_v1 state{};
+            state.abi_version = SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION;
+            state.struct_size = sizeof(state);
+            if (skippy_stage_plan_state_at_v1(plan, index, effect, &state, &error) ==
+                SKIPPY_STATUS_OK) {
+                read(state.identity);
+            } else if (error != nullptr) {
+                skippy_error_free(error);
+            }
+        }
     }
     benchmark::DoNotOptimize(retained);
     return total;
