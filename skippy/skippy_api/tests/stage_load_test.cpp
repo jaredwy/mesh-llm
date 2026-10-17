@@ -43,7 +43,7 @@ StagePlan plan(std::string contract = "{\"version\":1}") {
         .range = {0, 6},
         .execution_contract = std::move(contract),
         .profiles = {std::move(profile)},
-        .resident_tensors = {TensorId{"t.0"}, TensorId{"t.1"}},
+        .resident_identities = {TensorId{"t.0"}, TensorId{"t.1"}},
     };
 }
 
@@ -56,9 +56,9 @@ TEST(StageLoadConfig, CarriesTheClosureAndContract) {
     EXPECT_TRUE(config->staged());
     EXPECT_EQ(config->layers, (LayerRange{0, 6}));
     EXPECT_EQ(config->execution_contract, "{\"version\":1}");
-    ASSERT_EQ(config->resident_tensors.size(), 2U);
-    EXPECT_EQ(config->resident_tensors[0], "t.0");
-    EXPECT_EQ(config->resident_tensors[1], "t.1");
+    ASSERT_EQ(config->resident_identities.size(), 2U);
+    EXPECT_EQ(config->resident_identities[0], "t.0");
+    EXPECT_EQ(config->resident_identities[1], "t.1");
 }
 
 TEST(StageLoadConfig, PairsFrontierIdentitiesWithTheirBindings) {
@@ -81,7 +81,7 @@ TEST(StageLoadConfig, AnUnknownProfileIsRejected) {
 
 TEST(StageLoadConfig, AStageWithoutTensorsCannotBeLoaded) {
     StagePlan value = plan();
-    value.resident_tensors.clear();
+    value.resident_identities.clear();
     EXPECT_EQ(skippy::stage_load_config(value, ProfileId{"decode"}).error(),
               PlanError::ProfileCountMismatch);
 }

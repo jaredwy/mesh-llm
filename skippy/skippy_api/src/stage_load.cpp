@@ -9,7 +9,7 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
     const auto found = std::ranges::find_if(
         plan.profiles, [&](const PlanProfile& entry) { return entry.id == profile; });
     if (found == plan.profiles.end()) return std::unexpected(PlanError::ProfileIdentityMismatch);
-    if (plan.resident_tensors.empty()) return std::unexpected(PlanError::ProfileCountMismatch);
+    if (plan.resident_identities.empty()) return std::unexpected(PlanError::ProfileCountMismatch);
     if (plan.execution_contract.empty()) {
         return std::unexpected(PlanError::ActivationFrontierMismatch);
     }
@@ -18,8 +18,8 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
     config.layers = plan.range;
     config.execution_contract = plan.execution_contract;
 
-    config.resident_tensors.reserve(plan.resident_tensors.size());
-    std::ranges::transform(plan.resident_tensors, std::back_inserter(config.resident_tensors),
+    config.resident_identities.reserve(plan.resident_identities.size());
+    std::ranges::transform(plan.resident_identities, std::back_inserter(config.resident_identities),
                            [](const TensorId& tensor) { return tensor.view(); });
 
     // Identities and bindings are paired: the loader indexes them together.

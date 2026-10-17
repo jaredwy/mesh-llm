@@ -13,14 +13,30 @@
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace skippy::probe {
+
+/// Identity of a file version: a plan is only reusable while these hold.
+inline std::string file_stamp(const std::string& path) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error) return path;
+    const auto modified = std::filesystem::last_write_time(path, error);
+    const auto bytes = std::to_string(static_cast<std::uintmax_t>(size));
+    if (error) return path + ":" + bytes;
+    const auto ticks =
+        std::to_string(static_cast<std::int64_t>(modified.time_since_epoch().count()));
+    return path + ":" + bytes + ":" + ticks;
+}
 
 /// Metadata strings are model names; anything larger is a malformed file.
 constexpr std::uint64_t kMaxMetadataString = 1048576;
@@ -273,6 +289,45 @@ inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
             std::max(layers, std::stoll(tensor.name.substr(position + 4, dot - position - 4)) + 1);
     }
     return layers;
+}
+
+/// Reads the inventory once per file version.
+///
+/// Parsing a 468 MB shard costs tens of milliseconds and hashing it costs
+/// seconds, so both are memoised on the file's size and modification time.
+inline std::expected<std::vector<TensorInfo>, std::string>
+cached_inventory(const std::string& path) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::vector<TensorInfo>> cache;
+    const std::string stamp = file_stamp(path);
+    {
+        const std::scoped_lock lock(mutex);
+        if (const auto found = cache.find(stamp); found != cache.end()) return found->second;
+    }
+    auto tensors = read_inventory(path);
+    if (!tensors) return tensors;
+    {
+        const std::scoped_lock lock(mutex);
+        cache.insert_or_assign(stamp, *tensors);
+    }
+    return tensors;
+}
+
+/// Hashes the shard once per file version.
+inline std::string cached_sha256(const std::string& path) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::string> cache;
+    const std::string stamp = file_stamp(path);
+    {
+        const std::scoped_lock lock(mutex);
+        if (const auto found = cache.find(stamp); found != cache.end()) return found->second;
+    }
+    std::string digest = sha256_of(path);
+    {
+        const std::scoped_lock lock(mutex);
+        cache.insert_or_assign(stamp, digest);
+    }
+    return digest;
 }
 
 } // namespace skippy::probe

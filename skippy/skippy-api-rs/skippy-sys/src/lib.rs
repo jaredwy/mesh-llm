@@ -119,6 +119,24 @@ pub mod ffi {
         dimensions: usize,
     }
 
+    /// One stage of a split model.
+    #[derive(Debug)]
+    struct StagePlanInfo {
+        ok: bool,
+        error: String,
+        layer_start: i32,
+        layer_end: i32,
+        /// Hex-encoded: the contract is opaque bytes, not text.
+        execution_contract_hex: String,
+        /// Hex-encoded: the planner's resident entries are 32-byte identities.
+        resident_identity_hex: Vec<String>,
+        /// Hex-encoded: an activation identity is a 32-byte tag.
+        import_identity_hex: Vec<String>,
+        import_binding_hex: Vec<String>,
+        export_identity_hex: Vec<String>,
+        export_binding_hex: Vec<String>,
+    }
+
     #[derive(Debug, Clone, Copy)]
     struct RerankResult {
         status: WorkloadStatus,
@@ -157,6 +175,9 @@ pub mod ffi {
 
         /// Writes the unit-normalised embedding into the first `dimensions`
         /// elements of `output`.
+        /// Plans `stage_count` contiguous stages over the model at `path`.
+        fn plan_stages(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
+
         fn embed(self: Pin<&mut Bridge>, session: &Session, tokens: &[i32], output: &mut [f32]) -> EmbedResult;
 
         /// One embedding per group, decoded in a single native pass. `tokens`

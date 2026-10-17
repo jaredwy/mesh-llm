@@ -160,6 +160,39 @@ impl Runtime {
     }
 
     /// Loads a GGUF model. The path is passed to llama as UTF-8.
+    /// Plans `stages` contiguous stages over the model at `path`.
+    ///
+    /// A stage carries everything a split runtime needs: the layers it owns,
+    /// its execution contract, and the values crossing each boundary. The
+    /// planner's identities are opaque 32-byte tags, so they are hex-encoded.
+    pub fn plan_stages(&self, path: &str, stages: u32) -> Result<Vec<StagePlan>, StagePlanError> {
+        let infos = self.lock().pin_mut().plan_stages(path, stages);
+        let mut plans = Vec::with_capacity(infos.len());
+        for info in infos {
+            if !info.ok {
+                return Err(StagePlanError::Rejected(info.error));
+            }
+            plans.push(StagePlan {
+                layers: info.layer_start..info.layer_end,
+                execution_contract_hex: info.execution_contract_hex,
+                resident_identities: info.resident_identity_hex,
+                imports: info
+                    .import_identity_hex
+                    .into_iter()
+                    .zip(info.import_binding_hex)
+                    .map(|(identity, binding)| FrontierValue { identity, binding })
+                    .collect(),
+                exports: info
+                    .export_identity_hex
+                    .into_iter()
+                    .zip(info.export_binding_hex)
+                    .map(|(identity, binding)| FrontierValue { identity, binding })
+                    .collect(),
+            });
+        }
+        Ok(plans)
+    }
+
     pub fn load_model(&self, path: &str) -> Result<Model<'_>, RuntimeError> {
         let result = self.lock().pin_mut().load_model(path);
         runtime_result(result.status)?;
@@ -170,6 +203,45 @@ impl Runtime {
         self.bridge.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
+
+/// One stage of a model split across runtimes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagePlan {
+    /// Layers this stage owns, half-open.
+    pub layers: std::ops::Range<i32>,
+    /// Hex-encoded contract the planner produced for this stage.
+    pub execution_contract_hex: String,
+    /// Hex-encoded identities of the tensors the stage keeps resident.
+    pub resident_identities: Vec<String>,
+    /// Values consumed from the predecessor stage.
+    pub imports: Vec<FrontierValue>,
+    /// Values handed to the successor stage.
+    pub exports: Vec<FrontierValue>,
+}
+
+/// One value crossing a stage boundary. Both halves are hex-encoded tags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontierValue {
+    pub identity: String,
+    pub binding: String,
+}
+
+/// Why a model could not be split.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StagePlanError {
+    /// The planner refused the request; the message says why.
+    Rejected(String),
+}
+
+impl std::fmt::Display for StagePlanError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(message) => write!(formatter, "stage plan rejected: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for StagePlanError {}
 
 pub struct Model<'rt> {
     runtime: &'rt Runtime,

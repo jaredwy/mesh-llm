@@ -29,14 +29,14 @@ struct StageLoadConfig {
     /// Opaque contract the planner produced for this stage.
     std::string_view execution_contract;
     /// Exact closure; never empty for a stage.
-    std::vector<std::string_view> resident_tensors;
+    std::vector<std::string_view> resident_identities;
     std::vector<std::string_view> activation_import_identities;
     std::vector<std::string_view> activation_import_bindings;
     std::vector<std::string_view> activation_export_identities;
     std::vector<std::string_view> activation_export_bindings;
 
     [[nodiscard]] bool staged() const noexcept {
-        return !resident_tensors.empty() && !execution_contract.empty();
+        return !resident_identities.empty() && !execution_contract.empty();
     }
 };
 

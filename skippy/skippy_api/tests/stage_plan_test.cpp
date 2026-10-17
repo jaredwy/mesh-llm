@@ -56,7 +56,7 @@ StagePlan plan(LayerRange range, std::int32_t layer_count, std::vector<PlanProfi
         .range = range,
         .execution_contract = "{}",
         .profiles = std::move(profiles),
-        .resident_tensors = {},
+        .resident_identities = {},
     };
 }
 

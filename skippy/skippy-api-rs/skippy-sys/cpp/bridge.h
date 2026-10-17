@@ -27,6 +27,7 @@ struct SessionResult;
 struct WorkloadResult;
 struct EmbedResult;
 struct RerankResult;
+struct StagePlanInfo;
 struct EncodeResult;
 
 class Bridge {
@@ -38,6 +39,10 @@ public:
     Bridge& operator=(const Bridge&) = delete;
 
     [[nodiscard]] ModelResult load_model(rust::Str path) noexcept;
+
+    /// Plans `stage_count` contiguous stages over the model at `path`.
+    [[nodiscard]] rust::Vec<StagePlanInfo> plan_stages(rust::Str path,
+                                                       std::uint32_t stage_count) noexcept;
     [[nodiscard]] RuntimeStatus unload_model(Model& model) noexcept;
 
     [[nodiscard]] SessionResult create_session(const Model& model, SessionConfig config) noexcept;

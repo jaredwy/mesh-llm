@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::cout << "materialized: " << materialized->profiles.size() << " profiles, "
-              << materialized->resident_tensors.size() << " resident tensors, "
+              << materialized->resident_identities.size() << " resident tensors, "
               << materialized->execution_contract.size() << " contract bytes\n";
 
     for (const skippy::PlanProfile& profile : materialized->profiles) {
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
             config.execution_contract = load->execution_contract.data();
 
             std::vector<const char*> residents;
-            for (const std::string_view name : load->resident_tensors) {
+            for (const std::string_view name : load->resident_identities) {
                 residents.push_back(name.data());
             }
             config.resident_tensor_names = residents.empty() ? nullptr : residents.data();

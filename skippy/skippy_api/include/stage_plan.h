@@ -160,7 +160,7 @@ struct StagePlan {
     std::string execution_contract;
 
     std::vector<PlanProfile> profiles;
-    std::vector<TensorId> resident_tensors;
+    std::vector<TensorId> resident_identities;
 
     [[nodiscard]] bool terminal() const noexcept { return range.end == layer_count; }
 };

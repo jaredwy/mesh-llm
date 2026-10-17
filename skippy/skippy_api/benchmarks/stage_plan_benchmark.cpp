@@ -256,7 +256,7 @@ std::size_t StageHarness::materialize_api() const {
     auto materialized = plan->materialize();
     if (!materialized) return 0;
     std::size_t total = materialized->execution_contract.size();
-    total += materialized->resident_tensors.size();
+    total += materialized->resident_identities.size();
     for (const auto& profile : materialized->profiles) {
         total += profile.activation_imports.size() + profile.activation_exports.size() +
                  profile.state_effects.size();

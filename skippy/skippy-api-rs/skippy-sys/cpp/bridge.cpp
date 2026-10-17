@@ -5,6 +5,8 @@
 #include "embed.h"
 #include "encode.h"
 #include "llama/backend.h"
+#include "llama/model_inventory.h"
+#include "llama/stage_planner.h"
 #include "rerank.h"
 #include "types.h"
 #include "workload.h"
@@ -172,6 +174,81 @@ std::unique_ptr<Bridge> new_bridge() noexcept {
     } catch (...) {
         return nullptr;
     }
+}
+
+namespace {
+
+rust::String hex_of(std::string_view value) {
+    static constexpr std::string_view kHex = "0123456789abcdef";
+    std::string out;
+    out.reserve(value.size() * 2);
+    for (const char byte : value) {
+        const auto raw = static_cast<unsigned char>(byte);
+        out.push_back(kHex[(raw >> 4U) & 0xFU]);
+        out.push_back(kHex[raw & 0xFU]);
+    }
+    return rust::String(std::move(out));
+}
+
+} // namespace
+
+rust::Vec<StagePlanInfo> Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) noexcept {
+    rust::Vec<StagePlanInfo> output;
+    const auto fail = [&output](const std::string& message) {
+        StagePlanInfo info{};
+        info.ok = false;
+        info.error = rust::String(message);
+        output.push_back(std::move(info));
+        return output;
+    };
+    if (stage_count == 0) return fail("a plan needs at least one stage");
+
+    const std::string model_path(path);
+    auto inventory = skippy::probe::read_inventory(model_path);
+    if (!inventory) return fail(inventory.error());
+    const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+
+    std::vector<skippy::LayerRange> ranges;
+    ranges.reserve(stage_count);
+    const std::int32_t base = layers / static_cast<std::int32_t>(stage_count);
+    const std::int32_t remainder = layers % static_cast<std::int32_t>(stage_count);
+    std::int32_t start = 0;
+    for (std::uint32_t index = 0; index < stage_count; ++index) {
+        const std::int32_t width = base + (static_cast<std::int32_t>(index) < remainder ? 1 : 0);
+        ranges.push_back(skippy::LayerRange{start, start + width});
+        start += width;
+    }
+
+    auto plans = skippy::llama::plan_model_stages(model_path, ranges);
+    if (!plans) return fail(plans.error().message);
+
+    for (const skippy::StageLoadConfig& config : *plans) {
+        StagePlanInfo info{};
+        info.ok = true;
+        info.layer_start = config.layers.start;
+        info.layer_end = config.layers.end;
+        info.execution_contract_hex = hex_of(config.execution_contract);
+        info.resident_identity_hex.reserve(config.resident_identities.size());
+        for (const std::string_view identity : config.resident_identities) {
+            info.resident_identity_hex.push_back(hex_of(identity));
+        }
+        info.import_binding_hex.reserve(config.activation_import_bindings.size());
+        for (const std::string_view value : config.activation_import_identities) {
+            info.import_identity_hex.push_back(hex_of(value));
+        }
+        for (const std::string_view value : config.activation_import_bindings) {
+            info.import_binding_hex.push_back(hex_of(value));
+        }
+        info.export_binding_hex.reserve(config.activation_export_bindings.size());
+        for (const std::string_view value : config.activation_export_identities) {
+            info.export_identity_hex.push_back(hex_of(value));
+        }
+        for (const std::string_view value : config.activation_export_bindings) {
+            info.export_binding_hex.push_back(hex_of(value));
+        }
+        output.push_back(std::move(info));
+    }
+    return output;
 }
 
 ModelResult Bridge::load_model(rust::Str path) noexcept {

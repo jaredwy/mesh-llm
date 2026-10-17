@@ -103,7 +103,7 @@ bool open_stage(skippy::llama::StagePlanner& planner, const std::string& path,
     }
 
     OwnedStrings residents;
-    for (const std::string_view name : load->resident_tensors)
+    for (const std::string_view name : load->resident_identities)
         residents.add(name);
     residents.seal();
     OwnedStrings imports;

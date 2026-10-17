@@ -349,7 +349,7 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
     plan.execution_contract = std::move(*contract);
 
     const auto resident_count = static_cast<std::size_t>(desc->resident_tensor_count);
-    plan.resident_tensors.reserve(resident_count);
+    plan.resident_identities.reserve(resident_count);
     for (const std::size_t index : std::views::iota(std::size_t{0}, resident_count)) {
         skippy_stage_plan_value_desc_v1 value{};
         value.abi_version = SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION;
@@ -360,7 +360,7 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
         if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
         auto identity = read_string(*plan_, value.identity);
         if (!identity.has_value()) return std::unexpected(identity.error());
-        plan.resident_tensors.push_back(TensorId{std::move(*identity)});
+        plan.resident_identities.push_back(TensorId{std::move(*identity)});
     }
 
     const auto profile_count = static_cast<std::size_t>(desc->profile_count);
@@ -384,7 +384,7 @@ plan_model_stages(const std::string& path, std::span<const LayerRange> ranges) {
         return std::unexpected(
             PlanFailure{.code = PlanError::EmptyChain, .message = "no ranges requested"});
     }
-    auto inventory = probe::read_inventory(path);
+    auto inventory = probe::cached_inventory(path);
     if (!inventory.has_value()) {
         return std::unexpected(PlanFailure{
             .code = PlanError::Rejected,
@@ -393,7 +393,7 @@ plan_model_stages(const std::string& path, std::span<const LayerRange> ranges) {
     }
 
     StagePlannerInputs inputs;
-    inputs.package = PackageId{probe::sha256_of(path)};
+    inputs.package = PackageId{probe::cached_sha256(path)};
     inputs.shard_paths = {path};
     inputs.tensors.reserve(inventory->size());
     for (const probe::TensorInfo& info : *inventory) {

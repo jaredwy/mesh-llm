@@ -46,6 +46,46 @@ fn tokens(session: &mut Session<'_>, text: &str) -> Vec<Token> {
 // Mirrors WorkloadTest's table and the reranker regression in `backend.cpp`.
 // ---------------------------------------------------------------------------
 
+/// A plan hands back what a split runtime needs: a contiguous partition with a
+/// resident closure, a contract, and a boundary that lines up between stages.
+#[test]
+fn stages_partition_the_model_and_share_one_boundary() {
+    let Some(path) = model_path("SKIPPY_TEST_MODEL") else {
+        return;
+    };
+    let runtime = Runtime::new().expect("runtime");
+
+    let plans = runtime.plan_stages(&path, 2).expect("two stages");
+    assert_eq!(plans.len(), 2, "two stages requested, two returned");
+    assert_eq!(plans[0].layers.start, 0, "the first stage starts at layer 0");
+    assert_eq!(
+        plans[0].layers.end, plans[1].layers.start,
+        "stages must be contiguous"
+    );
+
+    for plan in &plans {
+        assert!(
+            !plan.resident_identities.is_empty(),
+            "a stage keeps tensors resident"
+        );
+        assert!(
+            !plan.execution_contract_hex.is_empty(),
+            "a stage carries its contract"
+        );
+    }
+
+    assert!(!plans[0].exports.is_empty(), "a split stage exports a frontier");
+    // The identity is the contract across the boundary; the binding is
+    // side-local (the producer's tensor versus the consumer's slot), so only
+    // the identities must agree.
+    let exported: Vec<&String> = plans[0].exports.iter().map(|value| &value.identity).collect();
+    let imported: Vec<&String> = plans[1].imports.iter().map(|value| &value.identity).collect();
+    assert_eq!(
+        exported, imported,
+        "what stage 0 exports is what stage 1 imports, in order"
+    );
+}
+
 #[test]
 fn embedder_reports_mean_pooling_and_a_usable_width() {
     let Some((runtime, path)) = embedder() else { return };
