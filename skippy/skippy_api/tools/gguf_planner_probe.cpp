@@ -229,6 +229,29 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Repeat planning through the one-call entry point: the first call pays
+    // inventory, identity and realize; the second is a cache hit.
+    {
+        const auto start = std::chrono::steady_clock::now();
+        auto first = skippy::llama::plan_model_stages(
+            path, std::array<skippy::LayerRange, 1>{
+                      skippy::LayerRange{0, static_cast<std::int32_t>(layers)}});
+        const double first_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count();
+        const auto cached_start = std::chrono::steady_clock::now();
+        auto second = skippy::llama::plan_model_stages(
+            path, std::array<skippy::LayerRange, 1>{
+                      skippy::LayerRange{0, static_cast<std::int32_t>(layers)}});
+        const double cached_ms = std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now() - cached_start)
+                                     .count();
+        if (first.has_value() && second.has_value()) {
+            std::cout << "plan_model_stages: first " << first_ms << " ms, cached " << cached_ms
+                      << " ms\n";
+        }
+    }
+
     const double describe_us = microseconds(1000, [&] {
         const auto value = plan->range();
         if (!value) std::abort();

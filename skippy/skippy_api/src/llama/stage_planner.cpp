@@ -3,7 +3,10 @@
 #include "llama/model_inventory.h"
 
 #include <algorithm>
+#include <deque>
+#include <mutex>
 #include <ranges>
+#include <unordered_map>
 #include <utility>
 
 namespace skippy::llama {
@@ -378,6 +381,45 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
     return plan;
 }
 
+namespace {
+
+/// Realized plans live for the process lifetime so their string views stay
+/// valid; a server plans once per configuration, not once per request.
+struct PlanStore {
+    std::mutex mutex;
+    std::deque<StagePlan> plans;
+    std::unordered_map<std::string, std::vector<const StagePlan*>> by_key;
+};
+
+PlanStore& plan_store() {
+    static PlanStore store;
+    return store;
+}
+
+std::string cache_key(const std::string& path, std::span<const LayerRange> ranges) {
+    std::string key = probe::file_stamp(path);
+    for (const LayerRange range : ranges) {
+        key += "|" + std::to_string(range.start) + "-" + std::to_string(range.end);
+    }
+    return key;
+}
+
+std::expected<std::vector<StageLoadConfig>, PlanFailure>
+configs_from(const std::vector<const StagePlan*>& plans) {
+    std::vector<StageLoadConfig> configs;
+    configs.reserve(plans.size());
+    for (const StagePlan* plan : plans) {
+        auto config = stage_load_config(*plan, plan->profiles.front().id);
+        if (!config.has_value()) {
+            return std::unexpected(PlanFailure{.code = config.error(), .message = {}});
+        }
+        configs.push_back(std::move(*config));
+    }
+    return configs;
+}
+
+} // namespace
+
 std::expected<std::vector<StageLoadConfig>, PlanFailure>
 plan_model_stages(const std::string& path, std::span<const LayerRange> ranges) {
     if (ranges.empty()) {
@@ -421,23 +463,42 @@ plan_model_stages(const std::string& path, std::span<const LayerRange> ranges) {
     inputs.graph_configuration = GraphConfigurationId{"stage"};
     inputs.backend = BackendId{"metal"};
 
+    const std::string key = cache_key(path, ranges);
+    PlanStore& store = plan_store();
+
+    // Fast path: a plan for this file version and these ranges already exists.
+    {
+        const std::scoped_lock lock(store.mutex);
+        static std::unordered_map<std::string, std::vector<const StagePlan*>> cache;
+        if (const auto found = cache.find(key); found != cache.end()) {
+            auto configs = configs_from(found->second);
+            return configs;
+        }
+    }
+
     auto planner = StagePlanner::create(inputs);
     if (!planner.has_value()) return std::unexpected(planner.error());
 
-    std::vector<StageLoadConfig> configs;
-    configs.reserve(ranges.size());
+    std::vector<StagePlan> realized;
+    realized.reserve(ranges.size());
     for (const LayerRange range : ranges) {
         auto plan = planner->realize(range);
         if (!plan.has_value()) return std::unexpected(plan.error());
         auto materialized = plan->materialize();
         if (!materialized.has_value()) return std::unexpected(materialized.error());
-        auto config = stage_load_config(*materialized, materialized->profiles.front().id);
-        if (!config.has_value()) {
-            return std::unexpected(PlanFailure{.code = config.error(), .message = {}});
-        }
-        configs.push_back(std::move(*config));
+        realized.push_back(std::move(*materialized));
     }
-    return configs;
+
+    std::vector<const StagePlan*> stored;
+    {
+        const std::scoped_lock lock(store.mutex);
+        for (StagePlan& plan : realized) {
+            store.plans.push_back(std::move(plan));
+            stored.push_back(&store.plans.back());
+        }
+        store.by_key.insert_or_assign(key, stored);
+    }
+    return configs_from(stored);
 }
 
 std::expected<void, PlanFailure> validate_chain(std::span<const StagePlanHandle> plans) {
