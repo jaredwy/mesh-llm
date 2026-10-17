@@ -190,6 +190,10 @@ public:
     }
 
     std::size_t materialize_native_plan(skippy_stage_plan* plan) const;
+    [[nodiscard]] skippy_stage_plan* cached_native() const noexcept { return cached_native_; }
+    [[nodiscard]] const std::optional<StagePlanHandle>& cached_api() const noexcept {
+        return cached_api_;
+    }
 
 public:
     skippy_stage_planner* native_ = nullptr;
@@ -445,6 +449,69 @@ void materialize(benchmark::State& state, bool use_api) {
     }
 }
 
+/// Validates a two-stage chain: the native entry point against the facade's
+/// pure validator over materialised plans.
+void validate(benchmark::State& state, bool use_api) {
+    const std::string path = model_path();
+    if (path.empty()) {
+        state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
+        return;
+    }
+    auto inventory = skippy::probe::cached_inventory(path);
+    if (!inventory) {
+        state.SkipWithError("inventory failed");
+        return;
+    }
+    const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+    const std::int32_t half = layers / 2;
+
+    StageHarness first(path, LayerRange{0, half});
+    StageHarness second(path, LayerRange{half, layers});
+    if (!first.ready() || !second.ready()) {
+        state.SkipWithError("planner setup failed");
+        return;
+    }
+    first.cache_plan(use_api);
+    second.cache_plan(use_api);
+
+    std::size_t validated = 0;
+    if (use_api) {
+        // Materialise once: the native call validates handles, so charging the
+        // facade for materialisation inside the loop would compare unlike work.
+        std::vector<skippy::StagePlan> plans;
+        plans.reserve(2);
+        for (const auto* handle : {&first, &second}) {
+            if (!handle->cached_api().has_value()) {
+                state.SkipWithError("plan was not realized");
+                return;
+            }
+            auto plan = handle->cached_api()->materialize();
+            if (!plan.has_value()) {
+                state.SkipWithError("materialize failed");
+                return;
+            }
+            plans.push_back(std::move(*plan));
+        }
+        for (auto _ : state) {
+            validated = skippy::validate_chain(plans).has_value() ? 1 : 0;
+            benchmark::DoNotOptimize(&validated);
+        }
+        return;
+    }
+
+    skippy_stage_plan* plans[] = {first.cached_native(), second.cached_native()};
+    for (auto _ : state) {
+        skippy_error* error = nullptr;
+        const auto status = skippy_stage_plan_validate_chain_v1(plans, 2, &error);
+        if (error != nullptr) skippy_error_free(error);
+        validated = status == SKIPPY_STATUS_OK ? 1 : 0;
+        benchmark::DoNotOptimize(&validated);
+    }
+}
+
+void stage_validate_ffi(benchmark::State& state) { validate(state, false); }
+void stage_validate_api(benchmark::State& state) { validate(state, true); }
+
 void stage_realize_ffi(benchmark::State& state) { realize(state, false); }
 void stage_realize_api(benchmark::State& state) { realize(state, true); }
 void stage_materialize_ffi(benchmark::State& state) { materialize(state, false); }
@@ -454,3 +521,5 @@ BENCHMARK(stage_realize_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
 BENCHMARK(stage_realize_api)->Arg(6)->Unit(benchmark::kMicrosecond);
 BENCHMARK(stage_materialize_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
 BENCHMARK(stage_materialize_api)->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_validate_ffi)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_validate_api)->Unit(benchmark::kMicrosecond);
