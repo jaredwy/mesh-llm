@@ -68,6 +68,8 @@ endif()
 add_library(skippy_core STATIC
     src/runtime.cpp
     src/normalize.cpp
+    src/stage_plan.cpp
+    src/execution_contract.cpp
 )
 add_library(Skippy::Core ALIAS skippy_core)
 
@@ -150,6 +152,8 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/embed_test.cpp
       tests/encode_test.cpp
       tests/types_test.cpp
+      tests/stage_plan_test.cpp
+      tests/execution_contract_test.cpp
   )
   target_compile_options(skippy_api_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(skippy_api_tests
