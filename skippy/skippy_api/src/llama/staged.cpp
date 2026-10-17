@@ -103,7 +103,7 @@ std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& p
     return StagedModel{model, spec.layers};
 }
 
-std::expected<StagedSession, StagedFailure> StagedModel::create_session() {
+std::expected<StagedSession, StagedFailure> StagedModel::create_session() const {
     skippy_session* session = nullptr;
     skippy_error* error = nullptr;
     const skippy_status status = skippy_session_create(model_, &session, &error);

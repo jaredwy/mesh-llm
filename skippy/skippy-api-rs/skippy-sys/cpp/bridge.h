@@ -11,6 +11,7 @@
 // return value.
 
 #include "runtime.h"
+#include "llama/staged.h"
 
 #include "rust/cxx.h"
 
@@ -29,8 +30,32 @@ struct EmbedResult;
 struct RerankResult;
 struct StagePlanInfo;
 struct ChainValidation;
+struct StagedModelResult;
+struct StagedSessionResult;
+struct StagedEmbedResult;
 enum class ModelFamily : ::std::uint8_t;
 struct EncodeResult;
+
+/// Thin owners so the cxx bridge can hold a stage in a UniquePtr.
+class StagedModel {
+public:
+    explicit StagedModel(skippy::llama::StagedModel model) noexcept : model_(std::move(model)) {}
+    [[nodiscard]] const skippy::llama::StagedModel& get() const noexcept { return model_; }
+    [[nodiscard]] skippy::llama::StagedModel& get() noexcept { return model_; }
+
+private:
+    skippy::llama::StagedModel model_;
+};
+
+class StagedSession {
+public:
+    explicit StagedSession(skippy::llama::StagedSession session) noexcept
+        : session_(std::move(session)) {}
+    [[nodiscard]] skippy::llama::StagedSession& get() noexcept { return session_; }
+
+private:
+    skippy::llama::StagedSession session_;
+};
 
 class Bridge {
 public:
@@ -45,6 +70,17 @@ public:
     /// Plans `stage_count` contiguous stages over the model at `path`.
     [[nodiscard]] rust::Vec<StagePlanInfo> plan_stages(rust::Str path,
                                                        std::uint32_t stage_count) noexcept;
+
+    /// Opens stage `index` of `stages` over the model at `path`.
+    [[nodiscard]] StagedModelResult load_staged_model(rust::Str path, std::uint32_t stages,
+                                                      std::uint32_t index) noexcept;
+
+    /// Opens a session on a stage.
+    [[nodiscard]] StagedSessionResult create_staged_session(const StagedModel& model) noexcept;
+
+    /// Embeds `tokens` into `output` on a stage.
+    [[nodiscard]] StagedEmbedResult staged_embed(StagedSession& session, rust::Slice<const std::int32_t> tokens,
+                                                 rust::Slice<float> output) noexcept;
 
     /// Reads the model's family from its GGUF architecture.
     [[nodiscard]] ModelFamily model_family(rust::Str path) noexcept;

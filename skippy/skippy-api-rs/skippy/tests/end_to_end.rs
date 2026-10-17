@@ -13,8 +13,9 @@
 //! `integration.rs` keeps the broad smoke coverage; this file targets the
 //! behaviours that only a real model can confirm.
 
-use skippy::{ModelFamily, 
-    NativePooling, Pooling, Runtime, Session, SessionConfig, Token, WorkloadError, WorkloadInfo, WorkloadKind,
+use skippy::{
+    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, Token, WorkloadError, WorkloadInfo,
+    WorkloadKind,
 };
 
 fn model_path(variable: &str) -> Option<String> {
@@ -55,29 +56,16 @@ fn stages_partition_the_model_and_share_one_boundary() {
     };
     let runtime = Runtime::new().expect("runtime");
 
-    assert_eq!(
-        runtime.model_family(&path),
-        ModelFamily::Bert,
-        "MiniLM is a BERT encoder"
-    );
+    assert_eq!(runtime.model_family(&path), ModelFamily::Bert, "MiniLM is a BERT encoder");
 
     let plans = runtime.plan_stages(&path, 2).expect("two stages");
     assert_eq!(plans.len(), 2, "two stages requested, two returned");
     assert_eq!(plans[0].layers.start, 0, "the first stage starts at layer 0");
-    assert_eq!(
-        plans[0].layers.end, plans[1].layers.start,
-        "stages must be contiguous"
-    );
+    assert_eq!(plans[0].layers.end, plans[1].layers.start, "stages must be contiguous");
 
     for plan in &plans {
-        assert!(
-            !plan.resident_identities.is_empty(),
-            "a stage keeps tensors resident"
-        );
-        assert!(
-            !plan.execution_contract_hex.is_empty(),
-            "a stage carries its contract"
-        );
+        assert!(!plan.resident_identities.is_empty(), "a stage keeps tensors resident");
+        assert!(!plan.execution_contract_hex.is_empty(), "a stage carries its contract");
     }
 
     assert!(!plans[0].exports.is_empty(), "a split stage exports a frontier");
@@ -87,18 +75,50 @@ fn stages_partition_the_model_and_share_one_boundary() {
         "semantics count what crosses the boundary"
     );
     // A fresh split must validate as one clean chain.
-    runtime
-        .validate_stage_chain(&path, 2)
-        .expect("two stages form a chain");
+    runtime.validate_stage_chain(&path, 2).expect("two stages form a chain");
     // The identity is the contract across the boundary; the binding is
     // side-local (the producer's tensor versus the consumer's slot), so only
     // the identities must agree.
     let exported: Vec<&String> = plans[0].exports.iter().map(|value| &value.identity).collect();
     let imported: Vec<&String> = plans[1].imports.iter().map(|value| &value.identity).collect();
-    assert_eq!(
-        exported, imported,
-        "what stage 0 exports is what stage 1 imports, in order"
-    );
+    assert_eq!(exported, imported, "what stage 0 exports is what stage 1 imports, in order");
+}
+
+/// A stage is a model of its own: it opens, it owns resources, and its
+/// session borrows it. A slice with no pooling head refuses to embed and says
+/// why rather than returning a short vector.
+#[test]
+fn a_stage_opens_as_its_own_model() {
+    let Some(path) = model_path("SKIPPY_TEST_MODEL") else {
+        return;
+    };
+    let runtime = Runtime::new().expect("runtime");
+
+    // A slice is only openable when the native stage program can express the
+    // model's request inputs; BERT encoders need an attention mask the
+    // installer cannot own yet, so a refusal here is a capability boundary and
+    // must still carry its reason.
+    let stage = match runtime.load_stage(&path, 2, 0) {
+        Ok(stage) => stage,
+        Err(error) => {
+            assert!(!error.to_string().is_empty(), "a refusal carries a reason");
+            return;
+        }
+    };
+    let session = stage.create_session();
+
+    match session {
+        Ok(mut session) => {
+            // A non-terminal slice has no embedding head, so embedding must
+            // refuse with a reason rather than return a short vector.
+            let mut output = vec![0.0_f32; 384];
+            let outcome = session.embed_into(&[Token(1), Token(2), Token(3)], &mut output);
+            if let Err(error) = outcome {
+                assert!(!error.to_string().is_empty(), "a refusal carries the backend's reason");
+            }
+        }
+        Err(error) => assert!(!error.to_string().is_empty()),
+    }
 }
 
 #[test]

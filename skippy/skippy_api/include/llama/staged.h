@@ -50,7 +50,7 @@ public:
     [[nodiscard]] static std::expected<StagedModel, StagedFailure> open(const std::string& path,
                                                                         const StageSpec& spec);
 
-    [[nodiscard]] std::expected<StagedSession, StagedFailure> create_session();
+    [[nodiscard]] std::expected<StagedSession, StagedFailure> create_session() const;
 
     [[nodiscard]] LayerRange layers() const noexcept { return layers_; }
     [[nodiscard]] skippy_model* native() const noexcept { return model_; }

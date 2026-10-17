@@ -204,14 +204,19 @@ impl Runtime {
         self.lock().pin_mut().model_family(path)
     }
 
+    /// Opens stage `index` of `stages` in `path` as a model of its own.
+    pub fn load_stage(&self, path: &str, stages: u32, index: u32) -> Result<StagedModel<'_>, StageError> {
+        let result = self.lock().pin_mut().load_staged_model(path, stages, index);
+        if !result.ok || result.model.is_null() {
+            return Err(StageError::Rejected(result.error));
+        }
+        Ok(StagedModel { runtime: self, handle: result.model })
+    }
+
     /// Checks that the stages of `path` form one contiguous, handover-clean chain.
     pub fn validate_stage_chain(&self, path: &str, stages: u32) -> Result<(), ChainError> {
         let result = self.lock().pin_mut().validate_chain(path, stages);
-        if result.ok {
-            Ok(())
-        } else {
-            Err(ChainError::Invalid(result.error))
-        }
+        if result.ok { Ok(()) } else { Err(ChainError::Invalid(result.error)) }
     }
 
     pub fn load_model(&self, path: &str) -> Result<Model<'_>, RuntimeError> {
@@ -230,6 +235,61 @@ impl Runtime {
 /// Branch on this instead of parsing GGUF strings; unknown architectures are
 /// `Unknown`, never an error.
 pub use skippy_sys::ModelFamily;
+
+/// A stage of a split model, opened as its own model.
+///
+/// A stage is a real model: it owns native resources and must outlive every
+/// session created from it. The borrow in [`StagedSession`] enforces that.
+pub struct StagedModel<'rt> {
+    runtime: &'rt Runtime,
+    handle: UniquePtr<sys::StagedModel>,
+}
+
+/// A session on a stage. Borrows the stage it belongs to.
+pub struct StagedSession<'model> {
+    model: &'model StagedModel<'model>,
+    handle: UniquePtr<sys::StagedSession>,
+}
+
+impl<'rt> StagedModel<'rt> {
+    /// Opens a session on this stage.
+    pub fn create_session(&self) -> Result<StagedSession<'_>, StageError> {
+        let result = self.runtime.lock().pin_mut().create_staged_session(&self.handle);
+        if !result.ok || result.session.is_null() {
+            return Err(StageError::Rejected(result.error));
+        }
+        Ok(StagedSession { model: self, handle: result.session })
+    }
+}
+
+impl StagedSession<'_> {
+    /// Embeds `tokens` into `output`, which must hold one embedding.
+    ///
+    /// Returns the number of values written, or the backend's reason: a
+    /// non-terminal stage has no pooling head and refuses to embed.
+    pub fn embed_into(&mut self, tokens: &[Token], output: &mut [f32]) -> Result<usize, StageError> {
+        let native: Vec<i32> = tokens.iter().map(|token| token.0).collect();
+        let result = self.model.runtime.lock().pin_mut().staged_embed(self.handle.pin_mut(), &native, output);
+        if result.ok { Ok(result.dimensions) } else { Err(StageError::Rejected(result.error)) }
+    }
+}
+
+/// Why a stage could not be opened or used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageError {
+    /// The backend refused; the message is its own explanation.
+    Rejected(String),
+}
+
+impl std::fmt::Display for StageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(message) => write!(formatter, "stage rejected: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for StageError {}
 
 /// One stage of a model split across runtimes.
 #[derive(Debug, Clone, PartialEq, Eq)]

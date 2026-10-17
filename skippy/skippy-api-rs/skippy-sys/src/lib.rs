@@ -157,6 +157,30 @@ pub mod ffi {
         T5 = 9,
     }
 
+    /// A stage opened as its own model.
+    struct StagedModelResult {
+        ok: bool,
+        error: String,
+        /// Null unless `ok`.
+        model: UniquePtr<StagedModel>,
+    }
+
+    /// A session on a stage.
+    struct StagedSessionResult {
+        ok: bool,
+        error: String,
+        /// Null unless `ok`.
+        session: UniquePtr<StagedSession>,
+    }
+
+    /// One embedding from a staged session.
+    #[derive(Debug)]
+    struct StagedEmbedResult {
+        ok: bool,
+        error: String,
+        dimensions: usize,
+    }
+
     /// Outcome of validating a stage chain.
     #[derive(Debug)]
     struct ChainValidation {
@@ -205,15 +229,30 @@ pub mod ffi {
         /// Plans `stage_count` contiguous stages over the model at `path`.
         fn plan_stages(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
 
+        /// A stage opened as its own model.
+        type StagedModel;
+        /// A session on a stage.
+        type StagedSession;
+
+        /// Opens stage `index` of `stages` over the model at `path`.
+        fn load_staged_model(self: Pin<&mut Bridge>, path: &str, stages: u32, index: u32) -> StagedModelResult;
+
+        /// Opens a session on a stage.
+        fn create_staged_session(self: Pin<&mut Bridge>, model: &StagedModel) -> StagedSessionResult;
+
+        /// Embeds `tokens` into `output` on a stage.
+        fn staged_embed(
+            self: Pin<&mut Bridge>,
+            session: Pin<&mut StagedSession>,
+            tokens: &[i32],
+            output: &mut [f32],
+        ) -> StagedEmbedResult;
+
         /// Reads the model's family from its GGUF architecture.
         fn model_family(self: Pin<&mut Bridge>, path: &str) -> ModelFamily;
 
         /// Checks that a plan chain is contiguous and hands over cleanly.
-        fn validate_chain(
-            self: Pin<&mut Bridge>,
-            path: &str,
-            stage_count: u32,
-        ) -> ChainValidation;
+        fn validate_chain(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> ChainValidation;
 
         fn embed(self: Pin<&mut Bridge>, session: &Session, tokens: &[i32], output: &mut [f32]) -> EmbedResult;
 

@@ -314,6 +314,83 @@ constexpr ModelFamily to_ffi(skippy::ModelFamily family) noexcept {
 
 } // namespace
 
+StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages,
+                                            std::uint32_t index) noexcept {
+    StagedModelResult result{};
+    result.ok = false;
+
+    const std::string model_path(path);
+    auto inventory = skippy::probe::cached_inventory(model_path);
+    if (!inventory) {
+        result.error = rust::String(inventory.error());
+        return result;
+    }
+    const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+    if (stages == 0) {
+        result.error = rust::String("a split needs at least one stage");
+        return result;
+    }
+
+    std::vector<skippy::LayerRange> ranges;
+    ranges.reserve(stages);
+    const std::int32_t base = layers / static_cast<std::int32_t>(stages);
+    const std::int32_t remainder = layers % static_cast<std::int32_t>(stages);
+    std::int32_t start = 0;
+    for (std::uint32_t slot = 0; slot < stages; ++slot) {
+        const std::int32_t width = base + (static_cast<std::int32_t>(slot) < remainder ? 1 : 0);
+        ranges.push_back(skippy::LayerRange{start, start + width});
+        start += width;
+    }
+    if (index >= ranges.size()) {
+        result.error = rust::String("stage index is out of range");
+        return result;
+    }
+
+    auto configs = skippy::llama::plan_model_stages(model_path, ranges);
+    if (!configs) {
+        result.error = rust::String(configs.error().message);
+        return result;
+    }
+    const auto spec = skippy::llama::own((*configs)[index]);
+    auto model = skippy::llama::StagedModel::open(model_path, spec);
+    if (!model) {
+        result.error = rust::String(model.error().message);
+        return result;
+    }
+    result.ok = true;
+    result.model = std::make_unique<StagedModel>(std::move(*model));
+    return result;
+}
+
+StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noexcept {
+    StagedSessionResult result{};
+    result.ok = false;
+    auto session = model.get().create_session();
+    if (!session) {
+        result.error = rust::String(session.error().message);
+        return result;
+    }
+    result.ok = true;
+    result.session = std::make_unique<StagedSession>(std::move(*session));
+    return result;
+}
+
+StagedEmbedResult Bridge::staged_embed(StagedSession& session, rust::Slice<const std::int32_t> tokens,
+                                       rust::Slice<float> output) noexcept {
+    StagedEmbedResult result{};
+    result.ok = false;
+
+    std::vector<llama_token> native(tokens.begin(), tokens.end());
+    auto produced = session.get().embed(native, output);
+    if (!produced) {
+        result.error = rust::String(produced.error().message);
+        return result;
+    }
+    result.ok = true;
+    result.dimensions = *produced;
+    return result;
+}
+
 ModelFamily Bridge::model_family(rust::Str path) noexcept {
     const std::string model_path(path);
     auto architecture = skippy::probe::model_architecture(model_path);
