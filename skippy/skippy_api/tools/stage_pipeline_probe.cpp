@@ -58,6 +58,12 @@ struct Stage {
     Stage() = default;
     Stage(const Stage&) = delete;
     Stage& operator=(const Stage&) = delete;
+    Stage(Stage&& other) noexcept
+        : range(other.range), plan(std::move(other.plan)),
+          model(std::exchange(other.model, nullptr)),
+          session(std::exchange(other.session, nullptr)), output_desc(other.output_desc),
+          output(std::move(other.output)) {}
+    Stage& operator=(Stage&&) = delete;
     ~Stage() {
         if (session != nullptr) skippy_session_free(session, nullptr);
         if (model != nullptr) skippy_model_free(model, nullptr);
@@ -235,6 +241,47 @@ std::expected<std::vector<llama_token>, std::string> tokenize(skippy_model* mode
     return tokens;
 }
 
+skippy_sampling_config greedy_sampling() {
+    skippy_sampling_config sampling{};
+    sampling.version = 1;
+    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
+    sampling.seed = 0;
+    sampling.temperature = 1.0F;
+    sampling.top_k = 1;
+    sampling.top_p = 1.0F;
+    sampling.sampler_count = 1;
+    sampling.samplers[0] = SKIPPY_SAMPLER_TOP_K;
+    return sampling;
+}
+
+/// Decodes one token through every stage, carrying the activation forward.
+///
+/// A non-first slice needs the upstream activation on every call, prefill or
+/// decode, because the runtime keeps no incoming frame between calls.
+std::expected<llama_token, std::string> predict_chain(std::vector<Stage>& stages,
+                                                      llama_token next) {
+    const auto sampling = greedy_sampling();
+    const skippy_activation_desc* input_desc = nullptr;
+    const void* input = nullptr;
+    std::vector<std::uint8_t> carried;
+    llama_token predicted = -1;
+
+    for (Stage& stage : stages) {
+        std::vector<std::uint8_t> output(1U << 20);
+        std::size_t bytes = 0;
+        skippy_error* error = nullptr;
+        const auto status = skippy_decode_step_frame_sampled(
+            stage.session, next, &sampling, input_desc, input, &stage.output_desc, output.data(),
+            output.size(), &bytes, &predicted, &error);
+        if (status != SKIPPY_STATUS_OK) return std::unexpected(message_of(status, error));
+        output.resize(bytes);
+        carried = std::move(output);
+        input_desc = &stage.output_desc;
+        input = carried.data();
+    }
+    return predicted;
+}
+
 std::vector<skippy::LayerRange> partition(std::int32_t layers, int count) {
     std::vector<skippy::LayerRange> ranges;
     const std::int32_t base = layers / count;
@@ -340,5 +387,43 @@ int main(int argc, char** argv) {
     if (!run_stage(monolithic, *tokens, nullptr, nullptr)) return 1;
     std::cout << "single stage: " << payload_size(monolithic) << " bytes\n";
     std::cout << "chain vs single: " << compare(stages.back().output, monolithic.output) << "\n";
-    return 0;
+    // Numeric equivalence: the terminal stage must predict the same next token
+    // as an unstaged model given the same context.
+    const std::vector<llama_token> context(tokens->begin(), tokens->end() - 1);
+    const llama_token next = tokens->back();
+
+    const auto chain_token = predict_chain(stages, next);
+    if (!chain_token) {
+        std::cerr << "chain predict: " << chain_token.error() << "\n";
+        return 1;
+    }
+
+    Stage full;
+    auto full_config = skippy_runtime_config_default();
+    full_config.ctx_size = 512;
+    full_config.n_batch = 512;
+    full_config.n_ubatch = 512;
+    full_config.n_gpu_layers = 999;
+    skippy_error* error = nullptr;
+    if (skippy_model_open(path.c_str(), &full_config, &full.model, &error) != SKIPPY_STATUS_OK) {
+        std::cerr << "full open: " << message_of(SKIPPY_STATUS_ERROR, error) << "\n";
+        return 1;
+    }
+    if (skippy_session_create(full.model, &full.session, &error) != SKIPPY_STATUS_OK) {
+        std::cerr << "full session: " << message_of(SKIPPY_STATUS_ERROR, error) << "\n";
+        return 1;
+    }
+    if (!run_stage(full, context, nullptr, nullptr)) return 1;
+    std::vector<Stage> one;
+    one.reserve(1);
+    one.emplace_back(std::move(full));
+    const auto full_token = predict_chain(one, next);
+    if (!full_token) {
+        std::cerr << "full predict: " << full_token.error() << "\n";
+        return 1;
+    }
+
+    std::cout << "next token: chain=" << *chain_token << " full=" << *full_token << " -> "
+              << (*chain_token == *full_token ? "MATCH" : "MISMATCH") << "\n";
+    return *chain_token == *full_token ? 0 : 1;
 }
