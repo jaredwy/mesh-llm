@@ -12,6 +12,7 @@
  */
 
 #include "llama/stage_planner.h"
+#include "stage_load.h"
 
 #include "ggml.h"
 
@@ -388,6 +389,77 @@ int main(int argc, char ** argv) {
                   << semantics->first_layer << ", " << semantics->last_layer << "], recurrent="
                   << (semantics->recurrent ? "yes" : "no") << ", frontier="
                   << semantics->frontier_values << "\n";
+    }
+
+    // Gate for patch 0003: can the native loader open this stage using only
+    // what the plan says (closure, contract, boundary identities)?
+    if (argc > 4) {
+        const auto load = skippy::stage_load_config(*materialized, materialized->profiles.front().id);
+        if (!load) {
+            std::cout << "staged open: config rejected (" << static_cast<int>(load.error()) << ")\n";
+        } else {
+            auto config = skippy_runtime_config_default();
+            config.stage_index = load->stage_index;
+            config.layer_start = load->layers.start;
+            config.layer_end = load->layers.end;
+            config.ctx_size = 512;
+            config.n_batch = 512;
+            config.n_ubatch = 512;
+            config.n_gpu_layers = 999;
+            config.load_mode = SKIPPY_LOAD_MODE_LAYER_PACKAGE;
+            config.execution_contract = load->execution_contract.data();
+
+            std::vector<const char *> residents;
+            for (const std::string_view name : load->resident_tensors) {
+                residents.push_back(name.data());
+            }
+            config.resident_tensor_names = residents.empty() ? nullptr : residents.data();
+            config.resident_tensor_name_count = residents.size();
+
+            std::vector<const char *> import_ids;
+            std::vector<const char *> import_bindings;
+            for (const std::string_view name : load->activation_import_identities) {
+                import_ids.push_back(name.data());
+            }
+            for (const std::string_view name : load->activation_import_bindings) {
+                import_bindings.push_back(name.data());
+            }
+            config.activation_import_identities = import_ids.empty() ? nullptr : import_ids.data();
+            config.activation_import_identity_count = import_ids.size();
+            config.activation_import_bindings = import_bindings.empty() ? nullptr : import_bindings.data();
+
+            std::vector<const char *> export_ids;
+            std::vector<const char *> export_bindings;
+            for (const std::string_view name : load->activation_export_identities) {
+                export_ids.push_back(name.data());
+            }
+            for (const std::string_view name : load->activation_export_bindings) {
+                export_bindings.push_back(name.data());
+            }
+            config.activation_export_identities = export_ids.empty() ? nullptr : export_ids.data();
+            config.activation_export_identity_count = export_ids.size();
+            config.activation_export_bindings = export_bindings.empty() ? nullptr : export_bindings.data();
+
+            skippy_model * model = nullptr;
+            skippy_error * error = nullptr;
+            const auto start_ms = std::chrono::steady_clock::now();
+            const auto status = skippy_model_open(path.c_str(), &config, &model, &error);
+            const double open_ms = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - start_ms)
+                                       .count();
+            if (status != SKIPPY_STATUS_OK) {
+                std::cout << "staged open: rejected after " << open_ms << " ms: "
+                          << (error != nullptr && error->message != nullptr ? error->message : "?")
+                          << "\n";
+                if (error != nullptr) skippy_error_free(error);
+            } else {
+                std::cout << "staged open: ok in " << open_ms << " ms, layers ["
+                          << config.layer_start << ", " << config.layer_end << ")\n";
+                if (const auto freed = skippy_model_free(model, nullptr); freed != SKIPPY_STATUS_OK) {
+                    std::cout << "staged free: status " << static_cast<int>(freed) << "\n";
+                }
+            }
+        }
     }
 
     const double describe_us = microseconds(1000, [&] {
