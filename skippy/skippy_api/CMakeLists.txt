@@ -225,6 +225,10 @@ if(SKIPPY_API_BUILD_PLANNER_PROBE)
   add_executable(skippy_api_planner_probe tools/gguf_planner_probe.cpp)
   target_link_libraries(skippy_api_planner_probe PRIVATE Skippy::Api)
   target_compile_options(skippy_api_planner_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+  add_executable(skippy_api_stage_pipeline_probe tools/stage_pipeline_probe.cpp)
+  target_link_libraries(skippy_api_stage_pipeline_probe PRIVATE Skippy::Api)
+  target_compile_options(skippy_api_stage_pipeline_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 find_program(SKIPPY_CLANG_FORMAT_EXE NAMES clang-format)
