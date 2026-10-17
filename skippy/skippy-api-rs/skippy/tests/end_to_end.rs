@@ -13,7 +13,7 @@
 //! `integration.rs` keeps the broad smoke coverage; this file targets the
 //! behaviours that only a real model can confirm.
 
-use skippy::{
+use skippy::{ModelFamily, 
     NativePooling, Pooling, Runtime, Session, SessionConfig, Token, WorkloadError, WorkloadInfo, WorkloadKind,
 };
 
@@ -54,6 +54,12 @@ fn stages_partition_the_model_and_share_one_boundary() {
         return;
     };
     let runtime = Runtime::new().expect("runtime");
+
+    assert_eq!(
+        runtime.model_family(&path),
+        ModelFamily::Bert,
+        "MiniLM is a BERT encoder"
+    );
 
     let plans = runtime.plan_stages(&path, 2).expect("two stages");
     assert_eq!(plans.len(), 2, "two stages requested, two returned");

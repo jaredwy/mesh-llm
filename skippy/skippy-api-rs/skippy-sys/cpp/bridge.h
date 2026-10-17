@@ -29,6 +29,7 @@ struct EmbedResult;
 struct RerankResult;
 struct StagePlanInfo;
 struct ChainValidation;
+enum class ModelFamily : ::std::uint8_t;
 struct EncodeResult;
 
 class Bridge {
@@ -44,6 +45,9 @@ public:
     /// Plans `stage_count` contiguous stages over the model at `path`.
     [[nodiscard]] rust::Vec<StagePlanInfo> plan_stages(rust::Str path,
                                                        std::uint32_t stage_count) noexcept;
+
+    /// Reads the model's family from its GGUF architecture.
+    [[nodiscard]] ModelFamily model_family(rust::Str path) noexcept;
 
     /// Checks that a plan chain is contiguous and hands over cleanly.
     [[nodiscard]] ChainValidation validate_chain(rust::Str path,

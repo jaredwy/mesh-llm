@@ -141,6 +141,22 @@ pub mod ffi {
         recurrent_state: bool,
     }
 
+    /// Model families the facade names explicitly.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum ModelFamily {
+        Unknown = 0,
+        Llama = 1,
+        Qwen = 2,
+        Mistral = 3,
+        Gemma = 4,
+        Phi = 5,
+        Bert = 6,
+        Mamba = 7,
+        Rwkv = 8,
+        T5 = 9,
+    }
+
     /// Outcome of validating a stage chain.
     #[derive(Debug)]
     struct ChainValidation {
@@ -188,6 +204,9 @@ pub mod ffi {
         /// elements of `output`.
         /// Plans `stage_count` contiguous stages over the model at `path`.
         fn plan_stages(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
+
+        /// Reads the model's family from its GGUF architecture.
+        fn model_family(self: Pin<&mut Bridge>, path: &str) -> ModelFamily;
 
         /// Checks that a plan chain is contiguous and hands over cleanly.
         fn validate_chain(

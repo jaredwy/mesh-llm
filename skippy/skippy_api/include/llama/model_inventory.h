@@ -278,6 +278,37 @@ inline std::string sha256_of(const std::string& path) {
     return digest;
 }
 
+/// Reads `general.architecture`, the one metadata value the facade types.
+inline std::expected<std::string, std::string> model_architecture(const std::string& path) {
+    Reader reader(path);
+    if (!reader.okay()) return std::unexpected("cannot open " + path);
+
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    [[maybe_unused]] std::uint64_t tensor_count = 0;
+    std::uint64_t metadata_count = 0;
+    if (auto ok = reader.read(magic); !ok) return std::unexpected(ok.error());
+    if (auto ok = reader.read(version); !ok) return std::unexpected(ok.error());
+    if (auto ok = reader.read(tensor_count); !ok) return std::unexpected(ok.error());
+    if (auto ok = reader.read(metadata_count); !ok) return std::unexpected(ok.error());
+
+    std::string architecture;
+    for (std::uint64_t index = 0; index < metadata_count; ++index) {
+        auto key = reader.read_string();
+        if (!key) return std::unexpected(key.error());
+        std::uint32_t type = 0;
+        if (auto ok = reader.read(type); !ok) return std::unexpected(ok.error());
+        if (*key == "general.architecture" && type == 8) {
+            auto value = reader.read_string();
+            if (!value) return std::unexpected(value.error());
+            architecture = *value;
+            continue;
+        }
+        if (auto ok = skip_value(reader, type); !ok) return std::unexpected(ok.error());
+    }
+    return architecture;
+}
+
 inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
     std::int64_t layers = 0;
     for (const TensorInfo& tensor : tensors) {

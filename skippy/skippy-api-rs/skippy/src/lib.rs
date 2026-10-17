@@ -199,6 +199,11 @@ impl Runtime {
         Ok(plans)
     }
 
+    /// Reads the model's family from its GGUF architecture.
+    pub fn model_family(&self, path: &str) -> ModelFamily {
+        self.lock().pin_mut().model_family(path)
+    }
+
     /// Checks that the stages of `path` form one contiguous, handover-clean chain.
     pub fn validate_stage_chain(&self, path: &str, stages: u32) -> Result<(), ChainError> {
         let result = self.lock().pin_mut().validate_chain(path, stages);
@@ -219,6 +224,12 @@ impl Runtime {
         self.bridge.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
+
+/// Model families the facade names explicitly.
+///
+/// Branch on this instead of parsing GGUF strings; unknown architectures are
+/// `Unknown`, never an error.
+pub use skippy_sys::ModelFamily;
 
 /// One stage of a model split across runtimes.
 #[derive(Debug, Clone, PartialEq, Eq)]

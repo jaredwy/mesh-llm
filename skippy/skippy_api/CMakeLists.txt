@@ -70,6 +70,7 @@ add_library(skippy_core STATIC
     src/normalize.cpp
     src/stage_plan.cpp
     src/execution_contract.cpp
+    src/family.cpp
     src/stage_load.cpp
 )
 add_library(Skippy::Core ALIAS skippy_core)
@@ -156,6 +157,7 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/types_test.cpp
       tests/stage_plan_test.cpp
       tests/execution_contract_test.cpp
+    tests/family_test.cpp
       tests/stage_load_test.cpp
   )
   target_compile_options(skippy_api_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)

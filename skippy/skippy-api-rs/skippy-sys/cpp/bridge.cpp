@@ -6,6 +6,7 @@
 #include "encode.h"
 #include "llama/backend.h"
 #include "llama/model_inventory.h"
+#include "family.h"
 #include "llama/stage_planner.h"
 #include "rerank.h"
 #include "types.h"
@@ -300,6 +301,24 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) noexcept {
     output.push_back(std::move(info));
   }
   return output;
+}
+
+namespace {
+
+/// The generated enum mirrors the facade's values; this fails to build if not.
+constexpr ModelFamily to_ffi(skippy::ModelFamily family) noexcept {
+    static_assert(static_cast<unsigned>(skippy::ModelFamily::Bert) ==
+                  static_cast<unsigned>(ModelFamily::Bert));
+    return static_cast<ModelFamily>(static_cast<unsigned>(family));
+}
+
+} // namespace
+
+ModelFamily Bridge::model_family(rust::Str path) noexcept {
+    const std::string model_path(path);
+    auto architecture = skippy::probe::model_architecture(model_path);
+    if (!architecture) return ModelFamily::Unknown;
+    return to_ffi(skippy::family_of(*architecture));
 }
 
 ChainValidation Bridge::validate_chain(rust::Str path,
