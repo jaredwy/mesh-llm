@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -40,6 +41,18 @@ struct StageLoadConfig {
     std::size_t state_effects = 0;
     std::size_t written_state_effects = 0;
     bool recurrent_state = false;
+
+    /// Owning form of the same data, for callers that outlive the plan.
+    struct Spec {
+        std::int32_t stage_index = 0;
+        LayerRange layers;
+        std::string execution_contract;
+        std::vector<std::string> resident_identities;
+        std::vector<std::string> import_identities;
+        std::vector<std::string> import_bindings;
+        std::vector<std::string> export_identities;
+        std::vector<std::string> export_bindings;
+    };
 
     [[nodiscard]] bool staged() const noexcept {
         return !resident_identities.empty() && !execution_contract.empty();
