@@ -1,5 +1,7 @@
 #include "llama/staged.h"
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace skippy::llama {
