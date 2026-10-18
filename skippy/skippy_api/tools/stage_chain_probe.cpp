@@ -35,8 +35,8 @@ int main(int argc, char** argv) {
     std::vector<llama_token> tokens(static_cast<std::size_t>(count), 1);
     skippy::CopyFrameSink sink;
     const auto outcome = chain->prefill(tokens, sink);
-    if (!outcome) {
-        std::cerr << "run: " << outcome.error().message << "\n";
+    if (outcome.has_value()) {
+        std::cerr << "run: " << outcome->message << "\n";
         return 1;
     }
     std::cout << "terminal frame: " << (sink.frame ? sink.frame->size() : 0) << " bytes\n";

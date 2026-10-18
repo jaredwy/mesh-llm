@@ -26,14 +26,14 @@ using FrameBytes = std::span<const std::byte>;
 /// returns the reason.
 template <typename Sink>
 concept StageSink = requires(Sink& sink, FrameBytes frame) {
-    { sink.consume(frame) } -> std::same_as<std::expected<void, std::string>>;
+    { sink.consume(frame) } -> std::same_as<std::optional<std::string>>;
 };
 
 /// Advances the chain and keeps nothing. Useful for load tests and warmup.
 struct DiscardSink {
-    [[nodiscard]] std::expected<void, std::string> consume(FrameBytes frame) const {
+    [[nodiscard]] std::optional<std::string> consume(FrameBytes frame) const {
         static_cast<void>(frame);
-        return {};
+        return std::nullopt;
     }
 };
 
@@ -41,9 +41,9 @@ struct DiscardSink {
 struct CopyFrameSink {
     std::optional<std::vector<std::byte>> frame;
 
-    [[nodiscard]] std::expected<void, std::string> consume(FrameBytes source) {
+    [[nodiscard]] std::optional<std::string> consume(FrameBytes source) {
         frame = std::vector<std::byte>{source.begin(), source.end()};
-        return {};
+        return std::nullopt;
     }
 };
 

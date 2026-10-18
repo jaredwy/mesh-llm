@@ -46,8 +46,8 @@ public:
 
     /// Runs `tokens` through every stage, handing the terminal frame to `sink`.
     template <skippy::StageSink Sink>
-    [[nodiscard]] std::expected<void, StagedFailure> prefill(std::span<const llama_token> tokens,
-                                                             Sink& sink);
+    [[nodiscard]] std::optional<StagedFailure> prefill(std::span<const llama_token> tokens,
+                                                       Sink& sink);
 
     [[nodiscard]] std::size_t stage_count() const noexcept { return stages_.size(); }
 
@@ -64,27 +64,26 @@ private:
 };
 
 template <skippy::StageSink Sink>
-std::expected<void, StagedFailure> StageChain::prefill(std::span<const llama_token> tokens,
-                                                       Sink& sink) {
+std::optional<StagedFailure> StageChain::prefill(std::span<const llama_token> tokens, Sink& sink) {
     if (stages_.empty()) {
-        return std::unexpected(StagedFailure{.status = 0, .message = "chain is empty"});
+        return StagedFailure{.status = 0, .message = "chain is empty"};
     }
     ActivationFrame carried;
     if (auto first = run_stage(0, tokens, nullptr); first.has_value()) {
         carried = std::move(*first);
     } else {
-        return std::unexpected(first.error());
+        return first.error();
     }
     for (std::size_t index = 1; index < stages_.size(); ++index) {
         auto next = run_stage(index, tokens, &carried);
-        if (!next.has_value()) return std::unexpected(next.error());
+        if (!next.has_value()) return next.error();
         if (next->payload.empty()) break; // terminal stage: nothing crosses further
         carried = std::move(*next);
     }
-    if (auto accepted = sink.consume(skippy::FrameBytes{carried.payload}); !accepted) {
-        return std::unexpected(StagedFailure{.status = 0, .message = std::move(accepted.error())});
+    if (auto reason = sink.consume(skippy::FrameBytes{carried.payload}); reason.has_value()) {
+        return StagedFailure{.status = 0, .message = std::move(*reason)};
     }
-    return {};
+    return std::nullopt;
 }
 
 } // namespace skippy::llama
