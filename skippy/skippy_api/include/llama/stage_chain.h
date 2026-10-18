@@ -8,6 +8,7 @@
 /// the caller's decision, expressed as a compile-time sink: the library never
 /// guesses whether that means pool it, sample it, or drop it.
 
+#include "llama/prepared_export.h"
 #include "llama/staged.h"
 #include "stage_plan.h"
 #include "stage_sink.h"
@@ -24,12 +25,6 @@
 #include <vector>
 
 namespace skippy::llama {
-
-/// One activation boundary: payload plus the descriptor that shapes it.
-struct ActivationFrame {
-    std::vector<std::byte> payload;
-    skippy_activation_desc desc{};
-};
 
 /// Owns N stages and drives them in order.
 class StageChain {
@@ -55,10 +50,12 @@ private:
     struct Stage {
         StagedModel model;
         StagedSession session;
+        /// This stage's export frame, owned and reused across calls.
+        PreparedExport out;
     };
 
-    [[nodiscard]] std::expected<ActivationFrame, StagedFailure>
-    run_stage(std::size_t index, std::span<const llama_token> tokens, const ActivationFrame* input);
+    [[nodiscard]] std::optional<StagedFailure>
+    run_stage(std::size_t index, std::span<const llama_token> tokens, const PreparedExport* input);
 
     std::vector<Stage> stages_;
 };
@@ -68,19 +65,18 @@ std::optional<StagedFailure> StageChain::prefill(std::span<const llama_token> to
     if (stages_.empty()) {
         return StagedFailure{.status = 0, .message = "chain is empty"};
     }
-    ActivationFrame carried;
-    if (auto first = run_stage(0, tokens, nullptr); first.has_value()) {
-        carried = std::move(*first);
-    } else {
-        return first.error();
-    }
+    if (auto failure = run_stage(0, tokens, nullptr); failure.has_value()) return failure;
+    std::size_t carrying = 0;
     for (std::size_t index = 1; index < stages_.size(); ++index) {
-        auto next = run_stage(index, tokens, &carried);
-        if (!next.has_value()) return next.error();
-        if (next->payload.empty()) break; // terminal stage: nothing crosses further
-        carried = std::move(*next);
+        // Hand the previous stage's buffer over directly: no copy, no new frame.
+        if (auto failure = run_stage(index, tokens, &stages_[index - 1].out); failure.has_value()) {
+            return failure;
+        }
+        if (stages_[index].out.written().empty()) break; // terminal: nothing crosses
+        carrying = index;
     }
-    if (auto reason = sink.consume(skippy::FrameBytes{carried.payload}); reason.has_value()) {
+    const PreparedExport& terminal = stages_[carrying].out;
+    if (auto reason = sink.consume(skippy::FrameBytes{terminal.written()}); reason.has_value()) {
         return StagedFailure{.status = 0, .message = std::move(*reason)};
     }
     return std::nullopt;

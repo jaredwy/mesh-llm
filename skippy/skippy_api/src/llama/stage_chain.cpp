@@ -22,31 +22,34 @@ std::expected<StageChain, StagedFailure> StageChain::open(const std::string& pat
         if (!model) return std::unexpected(model.error());
         auto session = model->create_session();
         if (!session) return std::unexpected(session.error());
-        chain.stages_.push_back(Stage{.model = std::move(*model), .session = std::move(*session)});
+        chain.stages_.push_back(Stage{
+            .model = std::move(*model),
+            .session = std::move(*session),
+            .out = {},
+        });
     }
     return chain;
 }
 
-std::expected<ActivationFrame, StagedFailure>
-StageChain::run_stage(std::size_t index, std::span<const llama_token> tokens,
-                      const ActivationFrame* input) {
+std::optional<StagedFailure> StageChain::run_stage(std::size_t index,
+                                                   std::span<const llama_token> tokens,
+                                                   const PreparedExport* input) {
     Stage& stage = stages_[index];
     skippy_activation_desc input_desc{};
     if (input != nullptr) input_desc = input->desc;
 
-    ActivationFrame produced;
-    produced.payload.resize(std::size_t{65536});
+    auto buffer = stage.out.reserve(std::size_t{65536});
     std::size_t needed = 0;
     for (int attempt = 0; attempt < 3; ++attempt) {
         skippy_error* error = nullptr;
         const auto status = skippy_prefill_chunk_frame(
             stage.session.native(), tokens.data(), tokens.size(),
             input == nullptr ? nullptr : &input_desc,
-            input == nullptr ? nullptr : input->payload.data(), &produced.desc,
-            produced.payload.data(), produced.payload.size(), &needed, &error);
+            input == nullptr ? nullptr : input->written().data(), &stage.out.desc, buffer.data(),
+            buffer.size(), &needed, &error);
         if (status == SKIPPY_STATUS_OK) {
-            produced.payload.resize(needed);
-            return produced;
+            stage.out.set_written(needed);
+            return std::nullopt;
         }
         StagedFailure failure{.status = static_cast<int>(status), .message = {}};
         if (error != nullptr) {
@@ -54,12 +57,11 @@ StageChain::run_stage(std::size_t index, std::span<const llama_token> tokens,
             skippy_error_free(error);
         }
         if (status != SKIPPY_STATUS_BUFFER_TOO_SMALL || needed == 0) {
-            return std::unexpected(failure);
+            return failure;
         }
-        produced.payload.resize(needed);
+        buffer = stage.out.reserve(needed);
     }
-    return std::unexpected(
-        StagedFailure{.status = 0, .message = "activation frame sizing did not converge"});
+    return StagedFailure{.status = 0, .message = "activation frame sizing did not converge"};
 }
 
 } // namespace skippy::llama
