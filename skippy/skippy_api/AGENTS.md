@@ -28,6 +28,30 @@ benchmarks/         A/B harness, case manifest, comparison script
 tools/              probes (planner, stage pipeline, stage chain)
 ```
 
+## Keeping this file current
+
+This document is part of the deliverable, not commentary on it. Update it in the
+same commit as the change that taught you something:
+
+- **A new failure mode** goes in *Traps that have already bitten us*, with the
+  symptom (what it looked like), the cause (why the compiler and the tests did
+  not catch it) and the rule that prevents it. A trap without the symptom is not
+  actionable; a trap without the cause gets "fixed" the wrong way next time.
+- **A new rule or a changed rule** is written here before or with the code. If
+  code and this file disagree, this file is wrong until you update it — do not
+  leave the divergence for the next person.
+- **A new boundary** (something that belongs in `skippy/llama_cpp/patches`, a
+  missing ABI entry point, a model that cannot be staged) gets a manifest row
+  with acceptance `blocked-upstream` and its reason, plus a line here if it
+  changes what "ported" means.
+- **Never delete a trap** because "that can't happen any more" unless the code
+  that makes it impossible is in the same commit. Half of these entries exist
+  because a guard was removed and the bug came back.
+
+If you are an agent reading this: treat an undocumented discovery as unfinished
+work. The next session will not have your context, and this file is the only
+thing that survives it.
+
 ## Code rules
 
 ### Types and interfaces
