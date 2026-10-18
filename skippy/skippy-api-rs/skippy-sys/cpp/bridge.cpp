@@ -195,8 +195,9 @@ SessionResult to_result(llama::LlamaRuntime &runtime,
 }
 
 template <typename Status>
-Status to_plain_status(std::expected<void, RuntimeError> result) noexcept {
-  return result ? Status::Ok : to_status(result.error());
+/// The runtime reports "did it fail, and why" as an optional failure.
+Status to_plain_status(std::optional<RuntimeError> failure) noexcept {
+  return failure.has_value() ? to_status(*failure) : Status::Ok;
 }
 
 } // namespace
@@ -474,8 +475,7 @@ SessionResult Bridge::create_session(const Model &model,
 
 RuntimeStatus Bridge::release_session(Session &session) noexcept {
   return guarded<RuntimeStatus>([&] {
-    return to_plain_status<RuntimeStatus>(
-        impl_->runtime.release_session(session));
+    return to_plain_status<RuntimeStatus>(impl_->runtime.release_session(session));
   });
 }
 
