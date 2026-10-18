@@ -79,3 +79,9 @@ just skippy-api-checkpoint "feat(skippy-api): ..." <embed.gguf> <reranker.gguf>
 `.gitignore`, then commits with the subject you pass. Both accept the models
 as optional arguments — without them the Rust tests run unit-only, and
 `SKIPPY_TEST_REQUIRE_MODELS` is left unset so they skip rather than fail.
+
+## Working on this library
+
+See [AGENTS.md](AGENTS.md) for the code rules, the patch-porting procedure
+(A/B/budget/ceiling classification), the test split between mocked C++ and
+Rust end-to-end, and the traps that have already cost us a day.
