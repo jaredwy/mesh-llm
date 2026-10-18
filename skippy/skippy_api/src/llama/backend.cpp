@@ -170,7 +170,7 @@ LlamaSession::process_sequences(std::span<const std::span<const Token>> inputs) 
     for (const auto& input : inputs) {
         if (input.empty()) return std::unexpected(WorkloadError::EmptyInput);
         total += input.size();
-        if (total > static_cast<std::size_t>(batch_limit_)) {
+        if (total > static_cast<std::size_t>(max_tokens_) * sequences_) {
             return std::unexpected(WorkloadError::TooManyTokens);
         }
     }
@@ -251,7 +251,10 @@ std::int32_t LlamaSession::run_pass(Pass pass) noexcept {
 std::expected<void, WorkloadError> LlamaSession::process_tokens(std::span<const Token> tokens,
                                                                 Pass pass) {
     if (tokens.empty()) return std::unexpected(WorkloadError::EmptyInput);
-    if (tokens.size() > detail::max_batch_tokens || tokens.size() > batch_limit_) {
+    // The *configured* geometry bounds a session, not the capacity of the
+    // context it happens to be served by: a warmed larger context is reused for
+    // smaller requests, and the contract must not silently widen with it.
+    if (tokens.size() > detail::max_batch_tokens || tokens.size() > max_tokens_) {
         return std::unexpected(WorkloadError::TooManyTokens);
     }
     const auto count = static_cast<std::int32_t>(tokens.size());

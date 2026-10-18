@@ -273,6 +273,13 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) noexcept {
   for (const skippy::StageLoadConfig &config : *plans) {
     StagePlanInfo info{};
     info.ok = true;
+    info.profile_id_hex = hex_of(config.profile_id);
+    info.graph_identity_hex = hex_of(config.graph_identity);
+    info.profile_identity_hex = hex_of(config.profile_identity);
+    info.slice_identity_hex = hex_of(config.slice_identity);
+    info.source_snapshot_hex = hex_of(config.source_snapshot);
+    info.graph_configuration_hex = hex_of(config.graph_configuration);
+    info.backend_hex = hex_of(config.backend);
     info.frontier_values = config.frontier_values;
     info.state_effects = config.state_effects;
     info.written_state_effects = config.written_state_effects;
@@ -431,9 +438,9 @@ ChainValidation Bridge::validate_chain(rust::Str path,
     result.error = rust::String(plans.error().message);
     return result;
   }
-  if (const auto valid = skippy::validate_chain(*plans); !valid) {
+  if (const auto failure = skippy::validate_chain(*plans); failure.has_value()) {
     result.error = rust::String("plan chain rejected: " +
-                                std::string(skippy::describe(valid.error())));
+                                std::string(skippy::describe(*failure)));
     return result;
   }
   result.ok = true;

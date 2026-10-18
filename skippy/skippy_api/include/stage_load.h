@@ -36,6 +36,16 @@ struct StageLoadConfig {
     std::vector<std::string_view> activation_export_identities;
     std::vector<std::string_view> activation_export_bindings;
 
+    /// The six identities that describe which slice this stage is, so a caller
+    /// can name the stage it loaded without materialising the whole plan.
+    std::string_view profile_id;
+    std::string_view graph_identity;
+    std::string_view profile_identity;
+    std::string_view slice_identity;
+    std::string_view source_snapshot;
+    std::string_view graph_configuration;
+    std::string_view backend;
+
     /// What the stage's state looks like, for callers that never materialize.
     std::size_t frontier_values = 0;
     std::size_t state_effects = 0;
@@ -52,6 +62,13 @@ struct StageLoadConfig {
         std::vector<std::string> import_bindings;
         std::vector<std::string> export_identities;
         std::vector<std::string> export_bindings;
+        std::string profile_id;
+        std::string graph_identity;
+        std::string profile_identity;
+        std::string slice_identity;
+        std::string source_snapshot;
+        std::string graph_configuration;
+        std::string backend;
     };
 
     [[nodiscard]] bool staged() const noexcept {

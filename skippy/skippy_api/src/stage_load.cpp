@@ -30,6 +30,13 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
         config.activation_import_bindings.push_back(value.binding.view());
     }
     if (const auto semantics = summarize(plan, profile); semantics.has_value()) {
+        config.profile_id = found->id.view();
+        config.graph_identity = found->graph_identity.view();
+        config.profile_identity = found->profile_identity.view();
+        config.slice_identity = found->slice_identity.view();
+        config.source_snapshot = found->source_snapshot.view();
+        config.graph_configuration = found->graph_configuration.view();
+        config.backend = found->backend.view();
         config.frontier_values = semantics->frontier_values;
         config.state_effects = found->state_effects.size();
         config.written_state_effects = semantics->written;

@@ -173,6 +173,13 @@ impl Runtime {
                 return Err(StagePlanError::Rejected(info.error));
             }
             plans.push(StagePlan {
+                profile_id: info.profile_id_hex,
+                graph_identity: info.graph_identity_hex,
+                profile_identity: info.profile_identity_hex,
+                slice_identity: info.slice_identity_hex,
+                source_snapshot: info.source_snapshot_hex,
+                graph_configuration: info.graph_configuration_hex,
+                backend: info.backend_hex,
                 layers: info.layer_start..info.layer_end,
                 execution_contract_hex: info.execution_contract_hex,
                 resident_identities: info.resident_identity_hex,
@@ -304,6 +311,14 @@ pub struct StagePlan {
     pub imports: Vec<FrontierValue>,
     /// Values handed to the successor stage.
     pub exports: Vec<FrontierValue>,
+    /// Hex-encoded identities of the slice this stage is.
+    pub profile_id: String,
+    pub graph_identity: String,
+    pub profile_identity: String,
+    pub slice_identity: String,
+    pub source_snapshot: String,
+    pub graph_configuration: String,
+    pub backend: String,
     /// What the stage's state looks like, without materialising it.
     pub semantics: StageSemantics,
 }
