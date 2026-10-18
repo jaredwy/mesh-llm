@@ -120,11 +120,13 @@ LlamaSession::~LlamaSession() { model_.recycle(std::move(context_), max_tokens_,
 
 llama_context_ptr LlamaModel::take_idle_context(std::uint32_t max_tokens,
                                                 std::uint32_t sequences) noexcept {
-    // Geometry must match exactly: a context built for one sequence cannot
-    // decode several, and n_seq_max is fixed at creation.
+    // A larger idle context serves a smaller request: n_ctx and n_seq_max are
+    // capacities, and every call clears the K/V it will touch. Take the
+    // smallest slot that fits so a 768-token request does not build a new
+    // context when a warmed 1024-token one is sitting idle.
     auto* const match =
         std::ranges::find_if(idle_contexts_, [&](const std::optional<IdleContext>& slot) {
-            return slot && slot->max_tokens == max_tokens && slot->sequences == sequences;
+            return slot && slot->max_tokens >= max_tokens && slot->sequences >= sequences;
         });
     if (match == idle_contexts_.end() || !*match) return {};
     llama_context_ptr context = std::move((*match)->context);
