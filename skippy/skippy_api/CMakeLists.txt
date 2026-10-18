@@ -114,6 +114,7 @@ if(SKIPPY_BUILD_LLAMA)
     src/llama/batch.cpp
     src/llama/stage_planner.cpp
     src/llama/staged.cpp
+    src/llama/stage_chain.cpp
     )
   add_library(Skippy::Llama ALIAS skippy_llama)
   target_compile_options(skippy_llama PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -159,6 +160,7 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/stage_plan_test.cpp
       tests/execution_contract_test.cpp
     tests/family_test.cpp
+    tests/stage_chain_test.cpp
       tests/stage_load_test.cpp
   )
   target_compile_options(skippy_api_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -232,6 +234,9 @@ if(SKIPPY_API_BUILD_PLANNER_PROBE)
 
   add_executable(skippy_api_stage_pipeline_probe tools/stage_pipeline_probe.cpp)
   add_executable(skippy_api_staged_probe tools/staged_model_probe.cpp)
+  add_executable(skippy_api_stage_chain_probe tools/stage_chain_probe.cpp)
+  target_compile_options(skippy_api_stage_chain_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  target_link_libraries(skippy_api_stage_chain_probe PRIVATE Skippy::Api)
   target_compile_options(skippy_api_staged_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(skippy_api_staged_probe PRIVATE Skippy::Api)
   target_link_libraries(skippy_api_stage_pipeline_probe PRIVATE Skippy::Api)
