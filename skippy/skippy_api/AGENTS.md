@@ -63,6 +63,21 @@ tools/              probes (planner, stage pipeline, stage chain)
 - Do not add a method that is a dozen lines of straight-line logic with three
   early returns — name the phases instead (clang-tidy enforces complexity).
 
+### Performance
+
+- **Wins where we can, parity everywhere else.** Every row in
+  `benchmarks/cases.txt` must read `win` or `parity`. A row that loses is a bug
+  to fix or a design cost to justify in writing — `stage_materialize` at 0.80x
+  is documented, not ignored.
+- **Never claim a win the measurement does not support.** If the gate cannot
+  prove both sides did the same work, the row does not count.
+- **Remove work, do not micro-optimise.** The façade owns tokenisation, batch
+  fill, pooling and normalisation; everything else is llama. A change that
+  shaves nanoseconds off our layer while the decode dominates is not a result.
+- **Ask what the old ABI pays.** The retained-context pool, the tokenise scratch
+  and the plan cache all came from asking that question rather than from
+  profiling our own code.
+
 ### Rust
 
 - Map to idiomatic Rust, not to the C++ shape. Handles wrap `UniquePtr<_>`; a
@@ -142,6 +157,22 @@ it is a patch, not a façade feature.
 8. **Commit** with `just skippy-api-checkpoint "<conventional message>"`, which
    runs format, tidy, C++ tests and the Rust E2E suite first.
 
+### Manifest states
+
+`benchmarks/cases.txt` is tab separated:
+`patch  class  case  benchmark_filter  acceptance  note`.
+
+| acceptance | meaning |
+|---|---|
+| `win` | measured faster than the old ABI (class A) or than the reference (class B) |
+| `parity` | measured equal within the class's noise floor; the honest outcome when llama owns the work |
+| `pending` | the row is ours to write and has not been written yet |
+| `blocked-upstream` | the fix belongs in `skippy/llama_cpp/patches`; the note names the missing entry point or the owning patch |
+
+`just skippy-ab <case>` refuses `pending` and `blocked-upstream` rows with their
+note and exits 0 — an unwritten or upstream-blocked case is a known boundary,
+not a test failure.
+
 ### Workflow commands
 
 ```bash
@@ -153,6 +184,19 @@ just skippy-ab <case> <model.gguf>                    # prints WIN/PARITY/LOSS v
 just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
 just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare token
 ```
+
+## Tooling rules
+
+- **Do not write new Python tooling.** `benchmarks/compare_benchmarks.py` is
+  transitional. New automation belongs in a `just` recipe or a typed `tools/`
+  helper; the repository rule is in the root `AGENTS.md`.
+- **Commit through the recipe**, never a bare `git commit` on this tree:
+  `just skippy-api-checkpoint "<type(scope): subject>" [embed.gguf] [reranker.gguf]`.
+  It runs format, tidy, the C++ suite and the Rust end-to-end suite first.
+- **`cargo check` is not a build.** For a product build use `just build` /
+  `just skippy`; for validation use the recipes above.
+- Keep `benchmarks/README.md` current when a verdict changes; a stale table is
+  worse than no table.
 
 ## Traps that have already bitten us
 
