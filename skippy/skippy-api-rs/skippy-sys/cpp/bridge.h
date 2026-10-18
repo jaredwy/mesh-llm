@@ -83,8 +83,8 @@ public:
     [[nodiscard]] ModelResult load_model(rust::Str path) noexcept;
 
     /// Plans `stage_count` contiguous stages over the model at `path`.
-    [[nodiscard]] rust::Vec<StagePlanInfo> plan_stages(rust::Str path,
-                                                       std::uint32_t stage_count) noexcept;
+    [[nodiscard]] rust::Vec<StagePlanInfo>
+    plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept;
 
     /// Opens stage `index` of `stages` over the model at `path`.
     [[nodiscard]] StagedModelResult load_staged_model(rust::Str path, std::uint32_t stages,
@@ -110,7 +110,7 @@ public:
 
     /// Checks that a plan chain is contiguous and hands over cleanly.
     [[nodiscard]] ChainValidation validate_chain(rust::Str path,
-                                                 std::uint32_t stage_count) noexcept;
+                                                 std::uint32_t stage_count) const noexcept;
     [[nodiscard]] RuntimeStatus unload_model(Model& model) noexcept;
 
     [[nodiscard]] SessionResult create_session(const Model& model, SessionConfig config) noexcept;

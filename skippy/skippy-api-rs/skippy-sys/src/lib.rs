@@ -250,7 +250,7 @@ pub mod ffi {
         /// Writes the unit-normalised embedding into the first `dimensions`
         /// elements of `output`.
         /// Plans `stage_count` contiguous stages over the model at `path`.
-        fn plan_stages(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
+        fn plan_stages(self: &Bridge, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
 
         /// A stage opened as its own model.
         type StagedModel;
@@ -275,7 +275,7 @@ pub mod ffi {
         fn model_family(self: &Bridge, path: &str) -> ModelFamily;
 
         /// Checks that a plan chain is contiguous and hands over cleanly.
-        fn validate_chain(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> ChainValidation;
+        fn validate_chain(self: &Bridge, path: &str, stage_count: u32) -> ChainValidation;
 
         fn open_chain(self: Pin<&mut Bridge>, path: &str, ranges: &[i32]) -> ChainResult;
 

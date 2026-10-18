@@ -237,7 +237,7 @@ rust::String hex_of(std::string_view value) {
 } // namespace
 
 rust::Vec<StagePlanInfo>
-Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) noexcept {
+Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
   rust::Vec<StagePlanInfo> output;
   const auto fail = [&output](const std::string &message) {
     StagePlanInfo info{};
@@ -409,7 +409,7 @@ ModelFamily Bridge::model_family(rust::Str path) const noexcept {
 }
 
 ChainValidation Bridge::validate_chain(rust::Str path,
-                                       std::uint32_t stage_count) noexcept {
+                                       std::uint32_t stage_count) const noexcept {
   ChainValidation result{};
   result.ok = false;
 

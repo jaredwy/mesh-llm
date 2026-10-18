@@ -206,7 +206,7 @@ impl Runtime {
     /// its execution contract, and the values crossing each boundary. The
     /// planner's identities are opaque 32-byte tags, so they are hex-encoded.
     pub fn plan_stages(&self, path: &str, stages: u32) -> Result<Vec<StagePlan>, StagePlanError> {
-        let infos = self.lock().pin_mut().plan_stages(path, stages);
+        let infos = self.lock().plan_stages(path, stages);
         let mut plans = Vec::with_capacity(infos.len());
         for info in infos {
             if !info.ok {
@@ -262,7 +262,7 @@ impl Runtime {
 
     /// Checks that the stages of `path` form one contiguous, handover-clean chain.
     pub fn validate_stage_chain(&self, path: &str, stages: u32) -> Result<(), ChainError> {
-        let result = self.lock().pin_mut().validate_chain(path, stages);
+        let result = self.lock().validate_chain(path, stages);
         if result.ok { Ok(()) } else { Err(ChainError::Invalid(result.error)) }
     }
 
