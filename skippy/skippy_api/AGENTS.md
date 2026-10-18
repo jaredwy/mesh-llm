@@ -72,6 +72,34 @@ tools/              probes (planner, stage pipeline, stage chain)
 - Errors are typed (`WorkloadError`, `StageError`, `PlanError`) and carry the
   backend's message; do not flatten to strings at the boundary.
 
+## Never modify llama.cpp from here
+
+`skippy/llama_cpp/patches` is the only place llama.cpp changes live. This
+library **wraps** the runtime; it never edits it, and no PR here may touch a
+patch file, regenerate it, or carry a private llama fork.
+
+When a patch you are porting would work better if llama itself changed:
+
+1. **Do not make the change here.** Flag it instead, with the exact evidence —
+   the symbol that is missing, the function that re-derives state per call, the
+   cost you measured.
+2. **Record it as upstream-shaped work** in the manifest entry
+   (`benchmarks/cases.txt`, acceptance `blocked-upstream`) and in the README's
+   "not covered" section, so it is visible rather than lost.
+3. **Port what can be done outside llama**, and say plainly which half is not:
+   for example the prepared-export work (`PreparedExport`) removes our per-hop
+   allocation and descriptor rebuild, while llama still maps parts internally —
+   that half needs an ABI entry point, an ABI version bump and a per-family
+   implementation in the patch queue.
+4. **Prefer an upstream-worthy patch to a local workaround.** If the change is
+   generally useful (a missing accessor, a per-call re-derivation, a buffer that
+   should be reusable), it belongs in `llama_cpp/patches` as its own patch with
+   its own ABI note — not in a façade shim that hides the cost.
+
+The test for "is this upstream-shaped?" is simple: could the change be expressed
+as a C ABI function that any consumer of the staged runtime would want? If yes,
+it is a patch, not a façade feature.
+
 ## Testing rules
 
 - **Mocked unit tests belong in C++** (`tests/`, no llama). They pin contracts:
