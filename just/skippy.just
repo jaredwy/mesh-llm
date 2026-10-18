@@ -392,7 +392,7 @@ skippy-ab case="" model="":
     set -euo pipefail
     manifest="skippy/skippy_api/benchmarks/cases.txt"
     if [ -z "{{ case }}" ]; then
-        awk -F'\t' '!/^#/ && NF>=5 {printf "%-4s %-2s %-24s %s\n", $1, $2, $3, $5}' "$manifest"
+        awk -F'\t' '!/^#/ && NF>=5 {printf "%-4s %-2s %-24s %-18s %s\n", $1, $2, $3, $5, $6}' "$manifest"
         exit 0
     fi
     row=$(awk -F'\t' -v want="{{ case }}" '!/^#/ && $3==want {print; exit}' "$manifest")
@@ -402,8 +402,14 @@ skippy-ab case="" model="":
     fi
     filter=$(printf '%s' "$row" | cut -f4)
     expected=$(printf '%s' "$row" | cut -f5)
+    note=$(printf '%s' "$row" | cut -f6)
     if [ "$expected" = "pending" ]; then
-        echo "{{ case }}: pending (no benchmark row yet)"
+        echo "{{ case }}: pending${note:+ — $note}"
+        exit 0
+    fi
+    if [ "$expected" = "blocked-upstream" ]; then
+        echo "{{ case }}: blocked-upstream${note:+ — $note}"
+        echo "  work belongs in skippy/llama_cpp/patches, not in skippy_api (see AGENTS.md)"
         exit 0
     fi
     if [ -z "{{ model }}" ]; then
