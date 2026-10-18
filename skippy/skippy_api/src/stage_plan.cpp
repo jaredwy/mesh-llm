@@ -30,26 +30,26 @@ std::vector<ValueIdentity> PlanProfile::export_identities() const {
     return identities_of(activation_exports);
 }
 
-std::expected<void, PlanFailure> validate_inputs(const StagePlannerInputs& inputs) {
+std::optional<PlanFailure> validate_inputs(const StagePlannerInputs& inputs) {
     if (inputs.package.empty()) {
-        return std::unexpected(PlanFailure{
+        return PlanFailure{
             .code = PlanError::PackageMismatch,
             .message = "package id is empty",
-        });
+        };
     }
     if (inputs.shard_paths.empty()) {
-        return std::unexpected(PlanFailure{
+        return PlanFailure{
             .code = PlanError::Rejected,
             .message = "a planner needs at least one shard",
-        });
+        };
     }
     if (inputs.profiles.empty()) {
-        return std::unexpected(PlanFailure{
+        return PlanFailure{
             .code = PlanError::ProfileCountMismatch,
             .message = "a planner needs at least one profile",
-        });
+        };
     }
-    return {};
+    return std::nullopt;
 }
 
 std::expected<PlanSemantics, PlanError> summarize(const StagePlan& plan, const ProfileId& profile) {
@@ -84,18 +84,18 @@ std::vector<StateEffect> state_effects_at(const PlanProfile& profile, std::int32
     return effects;
 }
 
-std::expected<void, PlanError> validate(const StagePlan& plan) {
+std::optional<PlanError> validate(const StagePlan& plan) {
     if (plan.layer_count <= 0 || plan.range.start < 0 || plan.range.start >= plan.range.end ||
         plan.range.end > plan.layer_count) {
-        return std::unexpected(PlanError::InvalidRange);
+        return PlanError::InvalidRange;
     }
-    if (plan.package.empty()) return std::unexpected(PlanError::PackageMismatch);
-    if (plan.profiles.empty()) return std::unexpected(PlanError::ProfileCountMismatch);
+    if (plan.package.empty()) return PlanError::PackageMismatch;
+    if (plan.profiles.empty()) return PlanError::ProfileCountMismatch;
     const bool slice_matches = std::ranges::all_of(plan.profiles, [&](const PlanProfile& profile) {
         return profile.slice_range == plan.range;
     });
-    if (!slice_matches) return std::unexpected(PlanError::ProfileIdentityMismatch);
-    return {};
+    if (!slice_matches) return PlanError::ProfileIdentityMismatch;
+    return std::nullopt;
 }
 
 namespace {
@@ -108,38 +108,38 @@ bool ranges_join(std::span<const StagePlan> stages, std::size_t index) {
 
 bool ends_at_model_end(const StagePlan& stage) { return stage.range.end == stage.layer_count; }
 
-std::expected<void, PlanError> validate_handoff(const StagePlan& previous, const StagePlan& stage) {
+std::optional<PlanError> validate_handoff(const StagePlan& previous, const StagePlan& stage) {
     if (stage.profiles.size() != previous.profiles.size()) {
-        return std::unexpected(PlanError::ProfileCountMismatch);
+        return PlanError::ProfileCountMismatch;
     }
     for (const std::size_t index : std::views::iota(std::size_t{0}, stage.profiles.size())) {
         const PlanProfile& profile = stage.profiles[index];
         const PlanProfile& handoff = previous.profiles[index];
         if (!guards_match(handoff, profile)) {
-            return std::unexpected(PlanError::ProfileIdentityMismatch);
+            return PlanError::ProfileIdentityMismatch;
         }
         // What the earlier stage exports must be what this one imports, in
         // order: the frontier is a list of values, not a set.
         if (handoff.export_identities() != profile.import_identities()) {
-            return std::unexpected(PlanError::ActivationFrontierMismatch);
+            return PlanError::ActivationFrontierMismatch;
         }
     }
-    return {};
+    return std::nullopt;
 }
 
-std::expected<void, PlanError> validate_link(std::span<const StagePlan> stages, std::size_t index,
-                                             const PackageId& package) {
+std::optional<PlanError> validate_link(std::span<const StagePlan> stages, std::size_t index,
+                                       const PackageId& package) {
     const StagePlan& stage = stages[index];
-    if (stage.package != package) return std::unexpected(PlanError::PackageMismatch);
+    if (stage.package != package) return PlanError::PackageMismatch;
     if (stage.layer_count != stages.front().layer_count) {
-        return std::unexpected(PlanError::LayerCountMismatch);
+        return PlanError::LayerCountMismatch;
     }
-    if (!ranges_join(stages, index)) return std::unexpected(PlanError::IncompletePartition);
+    if (!ranges_join(stages, index)) return PlanError::IncompletePartition;
     const bool last = index + 1 == stages.size();
     if (last && !ends_at_model_end(stage)) {
-        return std::unexpected(PlanError::IncompletePartition);
+        return PlanError::IncompletePartition;
     }
-    if (index == 0) return {};
+    if (index == 0) return std::nullopt;
     return validate_handoff(stages[index - 1], stage);
 }
 
@@ -161,18 +161,19 @@ std::string_view describe(PlanError error) noexcept {
     return "unknown";
 }
 
-std::expected<void, PlanError> validate_chain(std::span<const StagePlan> stages) {
-    if (stages.empty()) return std::unexpected(PlanError::EmptyChain);
+std::optional<PlanError> validate_chain(std::span<const StagePlan> stages) {
+    if (stages.empty()) return PlanError::EmptyChain;
 
     for (const StagePlan& stage : stages) {
-        if (auto valid = validate(stage); !valid) return valid;
+        if (auto failure = validate(stage); failure.has_value()) return failure;
     }
 
     const PackageId package = stages.front().package;
     for (const std::size_t index : std::views::iota(std::size_t{0}, stages.size())) {
-        if (auto valid = validate_link(stages, index, package); !valid) return valid;
+        if (auto failure = validate_link(stages, index, package); failure.has_value())
+            return failure;
     }
-    return {};
+    return std::nullopt;
 }
 
 } // namespace skippy

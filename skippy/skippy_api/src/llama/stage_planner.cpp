@@ -194,8 +194,8 @@ void StagePlannerDeleter::operator()(skippy_stage_planner* planner) const noexce
 }
 
 std::expected<StagePlanner, PlanFailure> StagePlanner::create(const StagePlannerInputs& inputs) {
-    if (auto valid = validate_inputs(inputs); !valid.has_value()) {
-        return std::unexpected(valid.error());
+    if (auto failure = validate_inputs(inputs); failure.has_value()) {
+        return std::unexpected(*failure);
     }
 
     std::vector<std::string> shard_storage = inputs.shard_paths;
@@ -374,9 +374,9 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
         plan.profiles.push_back(std::move(*profile));
     }
 
-    if (auto valid = validate(plan); !valid.has_value()) {
+    if (auto failure = validate(plan); failure.has_value()) {
         return std::unexpected(
-            PlanFailure{.code = valid.error(), .message = "materialized plan is invalid"});
+            PlanFailure{.code = *failure, .message = "materialized plan is invalid"});
     }
     return plan;
 }

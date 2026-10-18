@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -246,10 +247,10 @@ struct StagePlannerInputs {
 };
 
 /// Rejects inputs no planner could use, before any backend work starts.
-[[nodiscard]] std::expected<void, PlanFailure> validate_inputs(const StagePlannerInputs& inputs);
+[[nodiscard]] std::optional<PlanFailure> validate_inputs(const StagePlannerInputs& inputs);
 
 /// Checks one plan on its own: range is non-empty and inside the model.
-[[nodiscard]] std::expected<void, PlanError> validate(const StagePlan& plan);
+[[nodiscard]] std::optional<PlanError> validate(const StagePlan& plan);
 
 /// Checks that `stages` form one complete, compatible chain.
 ///
@@ -257,7 +258,7 @@ struct StagePlannerInputs {
 /// individually valid; ranges partition `[0, layer_count)` in order; adjacent
 /// stages agree on model, profile count and per-profile guard; and each
 /// stage's exports are exactly the next stage's imports.
-[[nodiscard]] std::expected<void, PlanError> validate_chain(std::span<const StagePlan> stages);
+[[nodiscard]] std::optional<PlanError> validate_chain(std::span<const StagePlan> stages);
 
 /// Stable name of a rejection reason, for logs and error messages.
 [[nodiscard]] std::string_view describe(PlanError error) noexcept;
