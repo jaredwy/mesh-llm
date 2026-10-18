@@ -693,7 +693,7 @@ template <bool UseFfi> void SessionCreate(benchmark::State& state) {
                 state.SkipWithError("create_session failed");
                 return;
             }
-            harness->api_runtime->release_session(*session).value();
+            (void)harness->api_runtime->release_session(*session);
         }
     }
 
