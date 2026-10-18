@@ -401,7 +401,7 @@ StagedEmbedResult Bridge::staged_embed(StagedSession& session, rust::Slice<const
     return result;
 }
 
-ModelFamily Bridge::model_family(rust::Str path) noexcept {
+ModelFamily Bridge::model_family(rust::Str path) const noexcept {
     const std::string model_path(path);
     auto architecture = skippy::probe::model_architecture(model_path);
     if (!architecture) return ModelFamily::Unknown;

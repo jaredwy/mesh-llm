@@ -106,7 +106,7 @@ public:
                                            rust::Slice<const std::int32_t> tokens) noexcept;
 
     /// Reads the model's family from its GGUF architecture.
-    [[nodiscard]] ModelFamily model_family(rust::Str path) noexcept;
+    [[nodiscard]] ModelFamily model_family(rust::Str path) const noexcept;
 
     /// Checks that a plan chain is contiguous and hands over cleanly.
     [[nodiscard]] ChainValidation validate_chain(rust::Str path,

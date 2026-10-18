@@ -248,7 +248,7 @@ impl Runtime {
 
     /// Reads the model's family from its GGUF architecture.
     pub fn model_family(&self, path: &str) -> ModelFamily {
-        self.lock().pin_mut().model_family(path)
+        self.lock().model_family(path)
     }
 
     /// Opens stage `index` of `stages` in `path` as a model of its own.

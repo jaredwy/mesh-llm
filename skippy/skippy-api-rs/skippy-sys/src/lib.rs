@@ -272,7 +272,7 @@ pub mod ffi {
         ) -> StagedEmbedResult;
 
         /// Reads the model's family from its GGUF architecture.
-        fn model_family(self: Pin<&mut Bridge>, path: &str) -> ModelFamily;
+        fn model_family(self: &Bridge, path: &str) -> ModelFamily;
 
         /// Checks that a plan chain is contiguous and hands over cleanly.
         fn validate_chain(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> ChainValidation;
