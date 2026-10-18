@@ -384,6 +384,42 @@ skippy-api-rs-e2e embed_model="" reranker_model="" *ARGS="":
     SKIPPY_TEST_RERANKER="$reranker" \
       cargo test "$@"
 
+# Run one A/B case from the patch manifest (list cases with no argument).
+[unix]
+[positional-arguments]
+skippy-ab case="" model="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    manifest="skippy/skippy_api/benchmarks/cases.txt"
+    if [ -z "{{ case }}" ]; then
+        awk -F'\t' '!/^#/ && NF>=5 {printf "%-4s %-2s %-24s %s\n", $1, $2, $3, $5}' "$manifest"
+        exit 0
+    fi
+    row=$(awk -F'\t' -v want="{{ case }}" '!/^#/ && $3==want {print; exit}' "$manifest")
+    if [ -z "$row" ]; then
+        echo "no such case: {{ case }}" >&2
+        exit 1
+    fi
+    filter=$(printf '%s' "$row" | cut -f4)
+    expected=$(printf '%s' "$row" | cut -f5)
+    if [ "$expected" = "pending" ]; then
+        echo "{{ case }}: pending (no benchmark row yet)"
+        exit 0
+    fi
+    if [ -z "{{ model }}" ]; then
+        echo "{{ case }} needs a model: just skippy-ab {{ case }} <model.gguf>" >&2
+        exit 1
+    fi
+    out=$(mktemp -t skippy-ab).json
+    SKIPPY_BENCH_MODEL={{ model }} \
+        ./target/skippy-llama-api-ffi-bench/skippy_api_ffi_benchmarks \
+        --benchmark_filter="$filter" \
+        --benchmark_min_time=0.3s --benchmark_repetitions=5 \
+        --benchmark_enable_random_interleaving=true \
+        --benchmark_format=json --benchmark_out="$out" >/dev/null 2>&1
+    python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$out" | sed "s/^/  /"
+    echo "{{ case }}: acceptance=$expected"
+
 # Run the old C ABI against the skippy_api facade on one model (model=<gguf>).
 [unix]
 [positional-arguments]

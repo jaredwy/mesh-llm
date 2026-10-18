@@ -1,0 +1,17 @@
+# A/B case manifest. One case per line, tab separated:
+# patch  class  case  benchmark_filter  acceptance
+#   acceptance: win | parity | pending
+10	A	embed_512	^Embed/.*/512$	parity
+10	A	tokenize_4096	^Tokenize/.*/4096$	parity
+10	A	batch_build_512	^BatchBuild/.*/512$	win
+10	A	normalize_768	^Normalize/.*/768$	win
+10	B	batch_embed_8x8	^BatchEmbed/.*/8/8$	win
+10	B	rerank_batch_8	^RerankBatch/.*/8$	win
+10	A	model_load	^ModelLoad/	parity
+10	A	session_create	^SessionCreate/	parity
+10	A	session_create_cold	^SessionCreateCold	parity
+2	A	stage_realize	^stage_realize	parity
+1	A	stage_materialize	^stage_materialize	parity
+8	A	stage_validate	^stage_validate	win
+2	B	stage_chain	^stage_chain	pending
+9	B	stage_boundary	^stage_boundary	pending

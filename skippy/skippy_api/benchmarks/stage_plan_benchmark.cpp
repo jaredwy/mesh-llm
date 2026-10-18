@@ -515,9 +515,15 @@ void stage_realize_api(benchmark::State& state) { realize(state, true); }
 void stage_materialize_ffi(benchmark::State& state) { materialize(state, false); }
 void stage_materialize_api(benchmark::State& state) { materialize(state, true); }
 
-BENCHMARK(stage_realize_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
-BENCHMARK(stage_realize_api)->Arg(6)->Unit(benchmark::kMicrosecond);
-BENCHMARK(stage_materialize_ffi)->Arg(6)->Unit(benchmark::kMicrosecond);
-BENCHMARK(stage_materialize_api)->Arg(6)->Unit(benchmark::kMicrosecond);
-BENCHMARK(stage_validate_ffi)->Unit(benchmark::kMicrosecond);
-BENCHMARK(stage_validate_api)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_realize_ffi)->Name("stage_realize/FFI")->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_realize_api)->Name("stage_realize/API")->Arg(6)->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_materialize_ffi)
+    ->Name("stage_materialize/FFI")
+    ->Arg(6)
+    ->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_materialize_api)
+    ->Name("stage_materialize/API")
+    ->Arg(6)
+    ->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_validate_ffi)->Name("stage_validate/FFI")->Unit(benchmark::kMicrosecond);
+BENCHMARK(stage_validate_api)->Name("stage_validate/API")->Unit(benchmark::kMicrosecond);
