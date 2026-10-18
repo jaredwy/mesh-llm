@@ -239,11 +239,11 @@ public:
 
     // Destroys the session's resource and clears the handle. Fails only when
     // the handle does not name a live session (moved-from, released, foreign).
-    [[nodiscard]] std::expected<void, RuntimeError> release_session(Session& handle);
+    [[nodiscard]] std::optional<RuntimeError> release_session(Session& handle);
 
     // As release_session(); additionally fails with ModelInUse while any
     // session of this model is live, leaving model and handle untouched.
-    [[nodiscard]] std::expected<void, RuntimeError> unload_model(Model& handle);
+    [[nodiscard]] std::optional<RuntimeError> unload_model(Model& handle);
 
     // Destroys every live session, then every live model. Cannot fail.
     // Outstanding handles stop resolving; the runtime stays usable.
@@ -326,27 +326,27 @@ NativeRuntime<Backend>::create_session(const Model& handle, const SessionConfig&
 }
 
 template <RuntimeBackend Backend>
-std::expected<void, RuntimeError> NativeRuntime<Backend>::release_session(Session& handle) {
+std::optional<RuntimeError> NativeRuntime<Backend>::release_session(Session& handle) {
     const auto id = handle.id_;
-    if (!detail::contains(sessions_, id)) return std::unexpected(RuntimeError::InvalidSession);
+    if (!detail::contains(sessions_, id)) return RuntimeError::InvalidSession;
     sessions_[id->slot].resource.reset();
     handle.id_.reset();
-    return {};
+    return std::nullopt;
 }
 
 template <RuntimeBackend Backend>
-std::expected<void, RuntimeError> NativeRuntime<Backend>::unload_model(Model& handle) {
+std::optional<RuntimeError> NativeRuntime<Backend>::unload_model(Model& handle) {
     const auto id = handle.id_;
-    if (!detail::contains(models_, id)) return std::unexpected(RuntimeError::InvalidModel);
+    if (!detail::contains(models_, id)) return RuntimeError::InvalidModel;
     const auto uses_model = [&](const auto& session) noexcept {
         return detail::is_live(session) && session.model == *id;
     };
     if (std::ranges::any_of(sessions_, uses_model)) {
-        return std::unexpected(RuntimeError::ModelInUse);
+        return RuntimeError::ModelInUse;
     }
     models_[id->slot].resource.reset();
     handle.id_.reset();
-    return {};
+    return std::nullopt;
 }
 
 template <RuntimeBackend Backend> ShutdownSummary NativeRuntime<Backend>::shutdown() noexcept {

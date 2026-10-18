@@ -175,7 +175,7 @@ TEST_F(NativeRuntimeTest, CreateSessionRejectsUnloadedModel) {
     arm_load_model("a");
     auto model = load_model();
     ASSERT_TRUE(model.has_value());
-    ASSERT_TRUE(runtime_.unload_model(*model).has_value());
+    ASSERT_FALSE(runtime_.unload_model(*model).has_value());
 
     // No create_session expectation: the backend must not be consulted.
     const auto session = create_session(*model);
@@ -213,7 +213,7 @@ TEST_F(NativeRuntimeTest, MovedFromModelHandleIsRejectedAndMoveTargetWorks) {
     const auto via_source = create_session(*model);
     ASSERT_FALSE(via_source.has_value());
     EXPECT_EQ(via_source.error(), RuntimeError::InvalidModel);
-    EXPECT_EQ(runtime_.unload_model(*model).error(), RuntimeError::InvalidModel);
+    EXPECT_EQ(*runtime_.unload_model(*model), RuntimeError::InvalidModel);
     EXPECT_THAT(log_, IsEmpty());
 
     arm_create_session(model_resource, "s");
@@ -230,10 +230,10 @@ TEST_F(NativeRuntimeTest, MovedFromSessionHandleIsRejected) {
 
     Session moved = std::move(*session);
 
-    EXPECT_EQ(runtime_.release_session(*session).error(), RuntimeError::InvalidSession);
+    EXPECT_EQ(*runtime_.release_session(*session), RuntimeError::InvalidSession);
     EXPECT_THAT(log_, IsEmpty());
 
-    EXPECT_TRUE(runtime_.release_session(moved).has_value());
+    EXPECT_FALSE(runtime_.release_session(moved).has_value());
     EXPECT_THAT(log_, ElementsAre("session:s"));
 }
 
@@ -285,7 +285,7 @@ TEST_F(NativeRuntimeTest, WithSessionDoesNotInvokeVisitorForInvalidHandle) {
     arm_create_session(model_resource, "s");
     auto session = create_session(*model);
     ASSERT_TRUE(session.has_value());
-    ASSERT_TRUE(runtime_.release_session(*session).has_value());
+    ASSERT_FALSE(runtime_.release_session(*session).has_value());
     int calls = 0;
 
     const auto result =
@@ -317,12 +317,12 @@ TEST_F(NativeRuntimeTest, ReleaseSessionDestroysResourceAndClearsHandle) {
     auto session = create_session(*model);
     ASSERT_TRUE(session.has_value());
 
-    ASSERT_TRUE(runtime_.release_session(*session).has_value());
+    ASSERT_FALSE(runtime_.release_session(*session).has_value());
     EXPECT_THAT(log_, ElementsAre("session:s"));
 
     const auto again = runtime_.release_session(*session);
-    ASSERT_FALSE(again.has_value());
-    EXPECT_EQ(again.error(), RuntimeError::InvalidSession);
+    ASSERT_TRUE(again.has_value());
+    EXPECT_EQ(*again, RuntimeError::InvalidSession);
     EXPECT_THAT(log_, ElementsAre("session:s"));
 }
 
@@ -337,10 +337,10 @@ TEST_F(NativeRuntimeTest, ReleaseSessionLeavesOtherSessionsAlone) {
     auto s2 = create_session(*model);
     ASSERT_TRUE(s2.has_value());
 
-    ASSERT_TRUE(runtime_.release_session(*s1).has_value());
+    ASSERT_FALSE(runtime_.release_session(*s1).has_value());
 
     EXPECT_THAT(log_, ElementsAre("session:s1"));
-    EXPECT_TRUE(runtime_.release_session(*s2).has_value());
+    EXPECT_FALSE(runtime_.release_session(*s2).has_value());
     EXPECT_THAT(log_, ElementsAre("session:s1", "session:s2"));
 }
 
@@ -353,12 +353,12 @@ TEST_F(NativeRuntimeTest, UnloadModelRefusesWhileSessionIsLive) {
     ASSERT_TRUE(session.has_value());
 
     const auto refused = runtime_.unload_model(*model);
-    ASSERT_FALSE(refused.has_value());
-    EXPECT_EQ(refused.error(), RuntimeError::ModelInUse);
+    ASSERT_TRUE(refused.has_value());
+    EXPECT_EQ(*refused, RuntimeError::ModelInUse);
     EXPECT_THAT(log_, IsEmpty()); // neither resource was touched
 
-    ASSERT_TRUE(runtime_.release_session(*session).has_value());
-    ASSERT_TRUE(runtime_.unload_model(*model).has_value());
+    ASSERT_FALSE(runtime_.release_session(*session).has_value());
+    ASSERT_FALSE(runtime_.unload_model(*model).has_value());
     EXPECT_THAT(log_, ElementsAre("session:s", "model:a"));
 }
 
@@ -372,7 +372,7 @@ TEST_F(NativeRuntimeTest, UnloadModelIgnoresSessionsOfOtherModels) {
     arm_create_session(b_resource, "sb");
     ASSERT_TRUE(create_session(*b).has_value());
 
-    EXPECT_TRUE(runtime_.unload_model(*a).has_value());
+    EXPECT_FALSE(runtime_.unload_model(*a).has_value());
 
     EXPECT_THAT(log_, ElementsAre("model:a"));
 }
@@ -381,12 +381,12 @@ TEST_F(NativeRuntimeTest, UnloadModelInvalidatesHandle) {
     arm_load_model("a");
     auto model = load_model();
     ASSERT_TRUE(model.has_value());
-    ASSERT_TRUE(runtime_.unload_model(*model).has_value());
+    ASSERT_FALSE(runtime_.unload_model(*model).has_value());
 
     const auto again = runtime_.unload_model(*model);
 
-    ASSERT_FALSE(again.has_value());
-    EXPECT_EQ(again.error(), RuntimeError::InvalidModel);
+    ASSERT_TRUE(again.has_value());
+    EXPECT_EQ(*again, RuntimeError::InvalidModel);
     EXPECT_THAT(log_, ElementsAre("model:a")); // destroyed exactly once
 }
 
@@ -394,7 +394,7 @@ TEST_F(NativeRuntimeTest, UnloadedSlotIsReusedUnderNewGeneration) {
     arm_load_model("first");
     auto first = load_model();
     ASSERT_TRUE(first.has_value());
-    ASSERT_TRUE(runtime_.unload_model(*first).has_value());
+    ASSERT_FALSE(runtime_.unload_model(*first).has_value());
 
     auto& second_resource = arm_load_model("second");
     auto second = load_model();
@@ -442,8 +442,8 @@ TEST_F(NativeRuntimeTest, ShutdownInvalidatesOutstandingHandles) {
 
     runtime_.shutdown();
 
-    EXPECT_EQ(runtime_.release_session(*session).error(), RuntimeError::InvalidSession);
-    EXPECT_EQ(runtime_.unload_model(*model).error(), RuntimeError::InvalidModel);
+    EXPECT_EQ(*runtime_.release_session(*session), RuntimeError::InvalidSession);
+    EXPECT_EQ(*runtime_.unload_model(*model), RuntimeError::InvalidModel);
     EXPECT_THAT(log_, ElementsAre("session:s", "model:a")); // nothing destroyed twice
 }
 
@@ -488,7 +488,7 @@ TEST(NativeRuntimeDestruction, ReleasedResourcesAreNotDestroyedAgain) {
                 Return(ByMove(ModelResult{std::make_unique<LoggingModelResource>(log, "a")})));
         auto model = runtime.load_model(ModelConfig{});
         ASSERT_TRUE(model.has_value());
-        ASSERT_TRUE(runtime.unload_model(*model).has_value());
+        ASSERT_FALSE(runtime.unload_model(*model).has_value());
         EXPECT_THAT(log, ElementsAre("model:a"));
     }
     EXPECT_THAT(log, ElementsAre("model:a"));

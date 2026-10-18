@@ -110,7 +110,7 @@ protected:
 // --- checks that never reach the backend ------------------------------------------------
 
 TEST_F(RerankTest, InvalidSessionHandleIsRejected) {
-    ASSERT_TRUE(runtime_.release_session(session_).has_value());
+    ASSERT_FALSE(runtime_.release_session(session_).has_value());
 
     const auto result = rerank("q", "d");
 

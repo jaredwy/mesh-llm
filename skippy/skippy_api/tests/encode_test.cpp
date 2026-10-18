@@ -93,7 +93,7 @@ TEST_F(EncodePromptTest, EmptyInputIsRejectedWithoutTouchingTheSession) {
 }
 
 TEST_F(EncodePromptTest, InvalidSessionHandleIsRejected) {
-    ASSERT_TRUE(runtime_.release_session(session_).has_value());
+    ASSERT_FALSE(runtime_.release_session(session_).has_value());
 
     const auto result = encode(tokens_);
 
