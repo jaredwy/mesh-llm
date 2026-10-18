@@ -107,8 +107,10 @@ enum class StateResidency : std::uint8_t {
 };
 
 /// One persistent-state effect of a profile.
+/// What a stage does to one piece of persistent state. The identity bytes are
+/// deliberately absent: no consumer reads them, and materialising one string per
+/// effect made up over half of the copy cost of a plan.
 struct StateEffect {
-    ValueIdentity identity;
     StateKind kind = StateKind::KvKey;
     StateAccess access = StateAccess::Read;
     std::int32_t layer = 0;

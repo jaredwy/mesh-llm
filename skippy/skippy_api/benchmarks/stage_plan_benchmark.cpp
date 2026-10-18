@@ -283,7 +283,6 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
             state.struct_size = sizeof(state);
             if (skippy_stage_plan_state_at_v1(plan, index, effect, &state, &error) ==
                 SKIPPY_STATUS_OK) {
-                read(state.identity);
             } else if (error != nullptr) {
                 skippy_error_free(error);
             }
@@ -390,7 +389,6 @@ std::size_t StageHarness::materialize_native() const {
                 skippy_error_free(error);
                 break;
             }
-            read(state.identity);
         }
     }
 

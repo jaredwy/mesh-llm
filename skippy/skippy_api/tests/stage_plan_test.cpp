@@ -195,12 +195,8 @@ namespace {
 
 StateEffect effect(StateKind kind, StateAccess access, std::int32_t layer,
                    StateResidency residency = StateResidency::LayerLocal) {
-    return StateEffect{.identity = ValueIdentity{"state"},
-                       .kind = kind,
-                       .access = access,
-                       .layer = layer,
-                       .residency = residency,
-                       .write_ordinal = 0};
+    return StateEffect{
+        .kind = kind, .access = access, .layer = layer, .residency = residency, .write_ordinal = 0};
 }
 
 StagePlan with_states(std::vector<StateEffect> effects, std::size_t imports = 0,

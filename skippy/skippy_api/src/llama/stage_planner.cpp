@@ -122,10 +122,7 @@ read_states(const skippy_stage_plan& plan, std::size_t profile_index, std::uint6
             skippy_stage_plan_state_at_v1(&plan, profile_index, index, &desc, &error.raw);
         if (auto ok = check(status, error); !ok.has_value()) return std::unexpected(ok.error());
 
-        auto identity = read_string(plan, desc.identity);
-        if (!identity.has_value()) return std::unexpected(identity.error());
         effects.push_back(StateEffect{
-            .identity = ValueIdentity{std::move(*identity)},
             .kind = state_kind_of(desc.kind),
             .access = access_of(desc.access),
             .layer = desc.layer,
