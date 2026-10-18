@@ -57,11 +57,11 @@ enum class ContractError : std::uint8_t {
 };
 
 /// Checks the invariants that hold for every admitted contract.
-[[nodiscard]] std::expected<void, ContractError> validate(const ExecutionContract& contract);
+[[nodiscard]] std::optional<ContractError> validate(const ExecutionContract& contract);
 
 /// Checks a contract against the stage it was realized for.
-[[nodiscard]] std::expected<void, ContractError> validate(const ExecutionContract& contract,
-                                                          const LayerRange& stage);
+[[nodiscard]] std::optional<ContractError> validate(const ExecutionContract& contract,
+                                                    const LayerRange& stage);
 
 /// Parameters one profile is admitted to realize.
 ///
@@ -79,8 +79,8 @@ parameters_for(const ExecutionContract& contract, bool auxiliary, std::int32_t a
 [[nodiscard]] std::vector<TensorId> resident_parameters(const ExecutionContract& contract);
 
 /// Checks a stage's resident tensor set against that union.
-[[nodiscard]] std::expected<void, ContractError>
-validate_residents(const ExecutionContract& contract, std::span<const TensorId> residents);
+[[nodiscard]] std::optional<ContractError> validate_residents(const ExecutionContract& contract,
+                                                              std::span<const TensorId> residents);
 
 } // namespace skippy
 

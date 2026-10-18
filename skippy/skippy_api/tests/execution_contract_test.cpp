@@ -28,47 +28,46 @@ ExecutionContract contract(std::vector<std::string> decoder = {"a", "b"}) {
 } // namespace
 
 TEST(ExecutionContract, AcceptsASortedUniqueDecoder) {
-    EXPECT_TRUE(skippy::validate(contract()).has_value());
+    EXPECT_FALSE(skippy::validate(contract()).has_value());
 }
 
 TEST(ExecutionContract, RejectsAnotherVersion) {
     ExecutionContract value = contract();
     value.version = 2;
-    EXPECT_EQ(skippy::validate(value).error(), ContractError::UnsupportedVersion);
+    EXPECT_EQ(*skippy::validate(value), ContractError::UnsupportedVersion);
 }
 
 TEST(ExecutionContract, RejectsAnEmptyParameterName) {
-    EXPECT_EQ(skippy::validate(contract({"a", ""})).error(), ContractError::EmptyParameter);
+    EXPECT_EQ(*skippy::validate(contract({"a", ""})), ContractError::EmptyParameter);
 }
 
 TEST(ExecutionContract, RejectsAnEmptyProfile) {
-    EXPECT_EQ(skippy::validate(contract({})).error(), ContractError::EmptyParameter);
+    EXPECT_EQ(*skippy::validate(contract({})), ContractError::EmptyParameter);
 }
 
 TEST(ExecutionContract, RejectsUnsortedParameters) {
-    EXPECT_EQ(skippy::validate(contract({"b", "a"})).error(), ContractError::ParametersNotSorted);
+    EXPECT_EQ(*skippy::validate(contract({"b", "a"})), ContractError::ParametersNotSorted);
 }
 
 TEST(ExecutionContract, RejectsDuplicateParameters) {
-    EXPECT_EQ(skippy::validate(contract({"a", "a"})).error(), ContractError::DuplicateParameter);
+    EXPECT_EQ(*skippy::validate(contract({"a", "a"})), ContractError::DuplicateParameter);
 }
 
 TEST(ExecutionContract, RejectsAContractForAnotherStage) {
-    EXPECT_EQ(skippy::validate(contract(), LayerRange{6, 12}).error(),
-              ContractError::RangeMismatch);
-    EXPECT_TRUE(skippy::validate(contract(), kStage).has_value());
+    EXPECT_EQ(*skippy::validate(contract(), LayerRange{6, 12}), ContractError::RangeMismatch);
+    EXPECT_FALSE(skippy::validate(contract(), kStage).has_value());
 }
 
 TEST(ExecutionContract, RejectsNonContiguousAuxiliaryOffsets) {
     ExecutionContract value = contract();
     value.auxiliary = {{.offset = 1, .parameters = {"c"}}};
-    EXPECT_EQ(skippy::validate(value).error(), ContractError::AuxiliaryOffsetNotContiguous);
+    EXPECT_EQ(*skippy::validate(value), ContractError::AuxiliaryOffsetNotContiguous);
 }
 
 TEST(ExecutionContract, AcceptsContiguousAuxiliaryOffsets) {
     ExecutionContract value = contract();
     value.auxiliary = {{.offset = 0, .parameters = {"c"}}, {.offset = 1, .parameters = {"d", "e"}}};
-    EXPECT_TRUE(skippy::validate(value).has_value());
+    EXPECT_FALSE(skippy::validate(value).has_value());
 }
 
 TEST(ExecutionContract, DecoderProfileIsTheDefault) {
@@ -127,13 +126,11 @@ TEST(ExecutionContract, ResidentsAreTheSortedUnionOfEveryProfile) {
 
 TEST(ExecutionContract, ResidentsMustMatchExactly) {
     const std::vector<TensorId> matching{TensorId{"a"}, TensorId{"b"}};
-    EXPECT_TRUE(skippy::validate_residents(contract(), matching).has_value());
+    EXPECT_FALSE(skippy::validate_residents(contract(), matching).has_value());
 
     const std::vector<TensorId> missing{TensorId{"a"}};
-    EXPECT_EQ(skippy::validate_residents(contract(), missing).error(),
-              ContractError::ResidentMismatch);
+    EXPECT_EQ(*skippy::validate_residents(contract(), missing), ContractError::ResidentMismatch);
 
     const std::vector<TensorId> swapped{TensorId{"b"}, TensorId{"a"}};
-    EXPECT_EQ(skippy::validate_residents(contract(), swapped).error(),
-              ContractError::ResidentMismatch);
+    EXPECT_EQ(*skippy::validate_residents(contract(), swapped), ContractError::ResidentMismatch);
 }

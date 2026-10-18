@@ -6,55 +6,56 @@
 namespace skippy {
 namespace {
 
-std::expected<void, ContractError> validate_parameters(const std::vector<std::string>& parameters) {
+std::optional<ContractError> validate_parameters(const std::vector<std::string>& parameters) {
     if (std::ranges::any_of(parameters, [](const std::string& name) { return name.empty(); })) {
-        return std::unexpected(ContractError::EmptyParameter);
+        return ContractError::EmptyParameter;
     }
     const bool sorted = std::ranges::is_sorted(parameters);
     const bool unique = std::ranges::adjacent_find(parameters) == parameters.end();
-    if (!unique) return std::unexpected(ContractError::DuplicateParameter);
-    if (!sorted) return std::unexpected(ContractError::ParametersNotSorted);
-    return {};
+    if (!unique) return ContractError::DuplicateParameter;
+    if (!sorted) return ContractError::ParametersNotSorted;
+    return std::nullopt;
 }
 
-std::expected<void, ContractError> require_parameters(const std::vector<std::string>& parameters) {
-    if (parameters.empty()) return std::unexpected(ContractError::EmptyParameter);
+std::optional<ContractError> require_parameters(const std::vector<std::string>& parameters) {
+    if (parameters.empty()) return ContractError::EmptyParameter;
     return validate_parameters(parameters);
 }
 
 } // namespace
 
-std::expected<void, ContractError> validate(const ExecutionContract& contract) {
+std::optional<ContractError> validate(const ExecutionContract& contract) {
     if (contract.version != ExecutionContract::kSupportedVersion) {
-        return std::unexpected(ContractError::UnsupportedVersion);
+        return ContractError::UnsupportedVersion;
     }
-    if (auto valid = require_parameters(contract.decoder); !valid) return valid;
+    if (auto failure = require_parameters(contract.decoder); failure.has_value()) return failure;
     if (contract.decoder_embeddings) {
-        if (auto valid = require_parameters(*contract.decoder_embeddings); !valid) return valid;
+        if (auto failure = require_parameters(*contract.decoder_embeddings); failure.has_value())
+            return failure;
     }
     std::int32_t expected_offset = 0;
     for (const AuxiliaryProfile& profile : contract.auxiliary) {
         // Offsets index profiles by position; a gap would make index lookups
         // silently mean something else.
         if (profile.offset != expected_offset++) {
-            return std::unexpected(ContractError::AuxiliaryOffsetNotContiguous);
+            return ContractError::AuxiliaryOffsetNotContiguous;
         }
-        if (auto valid = require_parameters(profile.parameters); !valid) return valid;
+        if (auto failure = require_parameters(profile.parameters); failure.has_value())
+            return failure;
     }
-    return {};
+    return std::nullopt;
 }
 
-std::expected<void, ContractError> validate(const ExecutionContract& contract,
-                                            const LayerRange& stage) {
-    if (auto valid = validate(contract); !valid) return valid;
-    if (contract.range != stage) return std::unexpected(ContractError::RangeMismatch);
-    return {};
+std::optional<ContractError> validate(const ExecutionContract& contract, const LayerRange& stage) {
+    if (auto failure = validate(contract); failure.has_value()) return failure;
+    if (contract.range != stage) return ContractError::RangeMismatch;
+    return std::nullopt;
 }
 
 std::expected<std::span<const std::string>, ContractError>
 parameters_for(const ExecutionContract& contract, bool auxiliary, std::int32_t auxiliary_offset,
                bool embedding_input) {
-    if (auto valid = validate(contract); !valid) return std::unexpected(valid.error());
+    if (auto failure = validate(contract); failure.has_value()) return std::unexpected(*failure);
 
     if (auxiliary) {
         const auto index = static_cast<std::size_t>(auxiliary_offset);
@@ -86,13 +87,13 @@ std::vector<TensorId> resident_parameters(const ExecutionContract& contract) {
     return residents;
 }
 
-std::expected<void, ContractError> validate_residents(const ExecutionContract& contract,
-                                                      std::span<const TensorId> residents) {
+std::optional<ContractError> validate_residents(const ExecutionContract& contract,
+                                                std::span<const TensorId> residents) {
     const std::vector<TensorId> expected = resident_parameters(contract);
     if (expected.size() != residents.size() || !std::ranges::equal(expected, residents)) {
-        return std::unexpected(ContractError::ResidentMismatch);
+        return ContractError::ResidentMismatch;
     }
-    return {};
+    return std::nullopt;
 }
 
 } // namespace skippy
