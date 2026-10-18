@@ -11,6 +11,7 @@
 // return value.
 
 #include "runtime.h"
+#include "llama/stage_chain.h"
 #include "llama/staged.h"
 
 #include "rust/cxx.h"
@@ -32,11 +33,25 @@ struct StagePlanInfo;
 struct ChainValidation;
 struct StagedModelResult;
 struct StagedSessionResult;
+struct ChainResult;
+struct ChainRunResult;
 struct StagedEmbedResult;
 enum class ModelFamily : ::std::uint8_t;
 struct EncodeResult;
 
 /// Thin owners so the cxx bridge can hold a stage in a UniquePtr.
+/// Owns a chain of stages; cxx holds it behind a Box because it is move-only.
+class StageChainHandle {
+public:
+    StageChainHandle() = default;
+    explicit StageChainHandle(skippy::llama::StageChain chain) noexcept
+        : chain_(std::move(chain)) {}
+    [[nodiscard]] skippy::llama::StageChain& get() noexcept { return chain_; }
+
+private:
+    skippy::llama::StageChain chain_;
+};
+
 class StagedModel {
 public:
     explicit StagedModel(skippy::llama::StagedModel model) noexcept : model_(std::move(model)) {}
@@ -81,6 +96,14 @@ public:
     /// Embeds `tokens` into `output` on a stage.
     [[nodiscard]] StagedEmbedResult staged_embed(StagedSession& session, rust::Slice<const std::int32_t> tokens,
                                                  rust::Slice<float> output) noexcept;
+
+    /// Plans `ranges` (start/end pairs) and opens one stage per range.
+    [[nodiscard]] ChainResult open_chain(rust::Str path,
+                                         rust::Slice<const std::int32_t> ranges) noexcept;
+
+    /// Runs `tokens` through every stage, returning the terminal frame if any.
+    [[nodiscard]] ChainRunResult run_chain(StageChainHandle& chain,
+                                           rust::Slice<const std::int32_t> tokens) noexcept;
 
     /// Reads the model's family from its GGUF architecture.
     [[nodiscard]] ModelFamily model_family(rust::Str path) noexcept;

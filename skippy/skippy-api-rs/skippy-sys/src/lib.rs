@@ -166,6 +166,19 @@ pub mod ffi {
     }
 
     /// A stage opened as its own model.
+    struct ChainResult {
+        ok: bool,
+        error: String,
+        chain: UniquePtr<StageChainHandle>,
+    }
+
+    struct ChainRunResult {
+        ok: bool,
+        error: String,
+        has_frame: bool,
+        frame: Vec<u8>,
+    }
+
     struct StagedModelResult {
         ok: bool,
         error: String,
@@ -213,6 +226,8 @@ pub mod ffi {
         include!("skippy-sys/cpp/bridge.h");
 
         type Bridge;
+
+        type StageChainHandle;
         #[namespace = "skippy"]
         type Model;
         #[namespace = "skippy"]
@@ -261,6 +276,10 @@ pub mod ffi {
 
         /// Checks that a plan chain is contiguous and hands over cleanly.
         fn validate_chain(self: Pin<&mut Bridge>, path: &str, stage_count: u32) -> ChainValidation;
+
+        fn open_chain(self: Pin<&mut Bridge>, path: &str, ranges: &[i32]) -> ChainResult;
+
+        fn run_chain(self: Pin<&mut Bridge>, chain: Pin<&mut StageChainHandle>, tokens: &[i32]) -> ChainRunResult;
 
         fn embed(self: Pin<&mut Bridge>, session: &Session, tokens: &[i32], output: &mut [f32]) -> EmbedResult;
 

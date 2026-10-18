@@ -150,6 +150,46 @@ pub struct Runtime {
     bridge: Mutex<UniquePtr<sys::Bridge>>,
 }
 
+/// A model running as N chained stages. The caller drives it: one `run` call
+/// pushes tokens through every stage and hands back the terminal frame, if the
+/// terminal stage produces one.
+pub struct StageChain<'rt> {
+    runtime: &'rt Runtime,
+    chain: UniquePtr<sys::StageChainHandle>,
+    stages: usize,
+}
+
+impl Runtime {
+    pub fn open_chain(&self, path: &str, ranges: &[(i32, i32)]) -> Result<StageChain<'_>, StageError> {
+        let mut flat = Vec::with_capacity(ranges.len() * 2);
+        for &(start, end) in ranges {
+            flat.push(start);
+            flat.push(end);
+        }
+        let result = self.lock().pin_mut().open_chain(path, &flat);
+        if !result.ok {
+            return Err(StageError::Rejected(result.error));
+        }
+        Ok(StageChain { runtime: self, chain: result.chain, stages: ranges.len() })
+    }
+}
+
+impl StageChain<'_> {
+    pub fn run(&mut self, tokens: &[Token]) -> Result<Option<Vec<u8>>, StageError> {
+        let native: Vec<i32> = tokens.iter().map(|token| token.0).collect();
+        let result = self.runtime.lock().pin_mut().run_chain(self.chain.pin_mut(), &native);
+        if !result.ok {
+            return Err(StageError::Rejected(result.error));
+        }
+        Ok(result.has_frame.then_some(result.frame))
+    }
+
+    /// How many stages this chain drives; the plan decides it, so it is fixed.
+    pub fn stages(&self) -> usize {
+        self.stages
+    }
+}
+
 impl Runtime {
     pub fn new() -> Result<Self, RuntimeError> {
         let bridge = sys::new_bridge();

@@ -1,5 +1,7 @@
 #include "skippy-sys/cpp/bridge.h"
 
+#include "llama/stage_chain.h"
+
 #include "skippy-sys/src/lib.rs.h"
 
 #include "embed.h"
@@ -664,5 +666,65 @@ static_assert(failed_with<RuntimeStatus>(RuntimeStatus::InternalError) ==
               RuntimeStatus::InternalError);
 
 static_assert(sizeof(Token) == sizeof(std::int32_t));
+
+
+namespace {
+
+/// Collects the terminal frame so Rust can own it across the FFI boundary.
+struct CopyingSink {
+  std::vector<std::uint8_t> bytes;
+  std::optional<std::string> consume(skippy::FrameBytes frame) {
+    bytes.assign(reinterpret_cast<const std::uint8_t *>(frame.data()),
+                 reinterpret_cast<const std::uint8_t *>(frame.data()) + frame.size());
+    return std::nullopt;
+  }
+};
+
+} // namespace
+
+ChainResult Bridge::open_chain(rust::Str path,
+                               rust::Slice<const std::int32_t> ranges) noexcept {
+  ChainResult result{};
+  result.ok = false;
+  result.chain = std::make_unique<StageChainHandle>();
+
+  if (ranges.size() % 2 != 0) {
+    result.error = rust::String("ranges must be start/end pairs");
+    return result;
+  }
+  std::vector<skippy::LayerRange> layers;
+  layers.reserve(ranges.size() / 2);
+  for (std::size_t index = 0; index + 1 < ranges.size(); index += 2) {
+    layers.push_back(skippy::LayerRange{ranges[index], ranges[index + 1]});
+  }
+  auto chain = skippy::llama::StageChain::open(std::string(path), layers);
+  if (!chain) {
+    result.error = rust::String(chain.error().message);
+    return result;
+  }
+  result.chain = std::make_unique<StageChainHandle>(std::move(*chain));
+  result.ok = true;
+  return result;
+}
+
+ChainRunResult Bridge::run_chain(StageChainHandle &chain,
+                                 rust::Slice<const std::int32_t> tokens) noexcept {
+  ChainRunResult result{};
+  result.ok = false;
+  result.has_frame = false;
+
+  std::vector<llama_token> native(tokens.begin(), tokens.end());
+  CopyingSink sink;
+  if (auto failure = chain.get().prefill(native, sink); failure.has_value()) {
+    result.error = rust::String(failure->message);
+    return result;
+  }
+  result.has_frame = !sink.bytes.empty();
+  for (const std::uint8_t byte : sink.bytes) {
+    result.frame.push_back(byte);
+  }
+  result.ok = true;
+  return result;
+}
 
 } // namespace skippy::ffi

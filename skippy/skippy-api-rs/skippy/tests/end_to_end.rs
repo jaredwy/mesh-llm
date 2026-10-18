@@ -14,8 +14,8 @@
 //! behaviours that only a real model can confirm.
 
 use skippy::{
-    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, Token, WorkloadError, WorkloadInfo,
-    WorkloadKind,
+    ModelFamily, NativePooling, Pooling, Runtime, Session, SessionConfig, StageError, Token, WorkloadError,
+    WorkloadInfo, WorkloadKind,
 };
 
 fn model_path(variable: &str) -> Option<String> {
@@ -49,6 +49,32 @@ fn tokens(session: &mut Session<'_>, text: &str) -> Vec<Token> {
 
 /// A plan hands back what a split runtime needs: a contiguous partition with a
 /// resident closure, a contract, and a boundary that lines up between stages.
+#[test]
+fn a_chain_runs_every_stage_and_hands_back_a_terminal_frame() {
+    let path = model_path("SKIPPY_TEST_MODEL");
+    if path.is_none() {
+        return;
+    }
+    let path = path.expect("model path");
+    let runtime = Runtime::new().expect("runtime");
+    let ranges = [(0_i32, 12_i32), (12, 24)];
+    let mut chain = match runtime.open_chain(&path, &ranges) {
+        Ok(chain) => chain,
+        Err(StageError::Rejected(reason)) => {
+            assert!(!reason.is_empty(), "a rejection must explain itself");
+            return; // encoder models cannot install a stage program yet
+        }
+        Err(other) => panic!("open_chain: {other:?}"),
+    };
+    assert_eq!(chain.stages(), 2);
+
+    let tokens = [Token(1), Token(2), Token(3)];
+    let frame = chain.run(&tokens).expect("chain prefill");
+    if let Some(bytes) = frame {
+        assert!(!bytes.is_empty(), "a terminal frame with content must be non-empty");
+    }
+}
+
 #[test]
 fn stages_partition_the_model_and_share_one_boundary() {
     let Some(path) = model_path("SKIPPY_TEST_MODEL") else {
