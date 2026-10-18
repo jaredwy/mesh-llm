@@ -143,6 +143,8 @@ pub mod ffi {
         source_snapshot_hex: String,
         graph_configuration_hex: String,
         backend_hex: String,
+        request_identity_hex: Vec<String>,
+        request_binding_hex: Vec<String>,
         frontier_values: usize,
         state_effects: usize,
         written_state_effects: usize,

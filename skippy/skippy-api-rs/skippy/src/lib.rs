@@ -235,6 +235,12 @@ impl Runtime {
                     .zip(info.export_binding_hex)
                     .map(|(identity, binding)| FrontierValue { identity, binding })
                     .collect(),
+                request_inputs: info
+                    .request_identity_hex
+                    .into_iter()
+                    .zip(info.request_binding_hex)
+                    .map(|(identity, binding)| FrontierValue { identity, binding })
+                    .collect(),
                 semantics: StageSemantics {
                     frontier_values: info.frontier_values,
                     state_effects: info.state_effects,
@@ -351,6 +357,8 @@ pub struct StagePlan {
     pub imports: Vec<FrontierValue>,
     /// Values handed to the successor stage.
     pub exports: Vec<FrontierValue>,
+    /// Values this stage is handed as input (attention masks, positions, ...).
+    pub request_inputs: Vec<FrontierValue>,
     /// Hex-encoded identities of the slice this stage is.
     pub profile_id: String,
     pub graph_identity: String,

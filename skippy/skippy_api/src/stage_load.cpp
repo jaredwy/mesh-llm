@@ -44,6 +44,12 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
     }
 
     config.activation_export_identities.reserve(found->activation_exports.size());
+    config.request_input_identities.reserve(found->request_inputs.size());
+    config.request_input_bindings.reserve(found->request_inputs.size());
+    for (const auto& input : found->request_inputs) {
+        config.request_input_identities.push_back(input.identity.view());
+        config.request_input_bindings.push_back(input.binding.view());
+    }
     config.activation_export_bindings.reserve(found->activation_exports.size());
     for (const FrontierValue& value : found->activation_exports) {
         config.activation_export_identities.push_back(value.identity.view());

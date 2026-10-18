@@ -35,6 +35,9 @@ struct StageLoadConfig {
     std::vector<std::string_view> activation_import_bindings;
     std::vector<std::string_view> activation_export_identities;
     std::vector<std::string_view> activation_export_bindings;
+    /// Values the stage is handed as input (attention masks, positions, ...).
+    std::vector<std::string_view> request_input_identities;
+    std::vector<std::string_view> request_input_bindings;
 
     /// The six identities that describe which slice this stage is, so a caller
     /// can name the stage it loaded without materialising the whole plan.
@@ -62,6 +65,8 @@ struct StageLoadConfig {
         std::vector<std::string> import_bindings;
         std::vector<std::string> export_identities;
         std::vector<std::string> export_bindings;
+        std::vector<std::string> request_identities;
+        std::vector<std::string> request_bindings;
         std::string profile_id;
         std::string graph_identity;
         std::string profile_identity;
