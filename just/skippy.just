@@ -566,5 +566,5 @@ skippy-api-asan:
     #!/bin/bash
     set -euo pipefail
     cmake -S skippy/skippy_api -B target/skippy-api-asan -G Ninja         -DCMAKE_BUILD_TYPE=Debug         -DSKIPPY_BUILD_LLAMA=OFF         -DSKIPPY_API_BUILD_TESTS=ON         -DSKIPPY_SANITIZERS="address;undefined" >/dev/null
-    cmake --build target/skippy-api-asan --target skippy_api_tests --parallel "$(detect_jobs)"
+    cmake --build target/skippy-api-asan --target skippy_api_tests --parallel
     ctest --test-dir target/skippy-api-asan --output-on-failure
