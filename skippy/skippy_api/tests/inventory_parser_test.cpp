@@ -63,6 +63,21 @@ void put64(std::vector<std::uint8_t>& out, std::uint64_t value) {
     }
 }
 
+/// Mirrors the parser's data-start arithmetic (records end rounded up to the
+/// default 32-byte alignment) so a fixture's declared payload fits the file.
+void pad_for_payload(std::vector<std::uint8_t>& bytes, std::uint64_t stored_length,
+                     std::uint64_t offset = 0) {
+    const std::uint64_t data_start = (bytes.size() + 31U) / 32U * 32U;
+    const std::uint64_t needed = data_start + offset + stored_length;
+    if (needed > bytes.size()) bytes.resize(static_cast<std::size_t>(needed), 0);
+}
+
+skippy::probe::TensorInfo tensor(const char* name) {
+    skippy::probe::TensorInfo info;
+    info.name = name;
+    return info;
+}
+
 /// A v3 header with the given tensor and metadata counts.
 std::vector<std::uint8_t> header(std::uint64_t tensor_count, std::uint64_t metadata_count) {
     std::vector<std::uint8_t> bytes;
@@ -196,8 +211,9 @@ TEST(InventoryParser, ParsesATensorWithAllFourDimensions) {
     put32(bytes, 4); // rank
     for (int dim = 0; dim < 4; ++dim)
         put64(bytes, 2);
-    put32(bytes, 0); // ggml type F32
-    put64(bytes, 0); // offset
+    put32(bytes, 0);                           // ggml type F32
+    put64(bytes, 0);                           // offset
+    pad_for_payload(bytes, 4 * 2 * 2 * 2 * 2); // mocked F32 payload fits the file
     const std::string path = write_temp(bytes, "rank4");
     const auto inventory = read_inventory(path);
     std::remove(path.c_str());
@@ -242,6 +258,74 @@ TEST(InventoryParser, RejectsADimensionPastInt64) {
     const auto inventory = read_inventory(path);
     std::remove(path.c_str());
     ASSERT_FALSE(inventory.has_value());
+}
+
+TEST(InventoryParser, RejectsZeroAndNonPowerOfTwoAlignments) {
+    // Zero divides by zero at the data-start round-up; three misaligns every
+    // tensor offset the native loader computes.
+    for (const std::uint32_t alignment : {0U, 3U}) {
+        std::vector<std::uint8_t> bytes = header(0, 1);
+        const std::string key = "general.alignment";
+        put64(bytes, key.size());
+        bytes.insert(bytes.end(), key.begin(), key.end());
+        put32(bytes, 4); // GGUF u32
+        put32(bytes, alignment);
+        const std::string path = write_temp(bytes, "align-" + std::to_string(alignment));
+        const auto inventory = read_inventory(path);
+        std::remove(path.c_str());
+        ASSERT_FALSE(inventory.has_value()) << "alignment " << alignment << " accepted";
+        EXPECT_EQ(inventory.error(), "invalid general.alignment");
+    }
+}
+
+TEST(InventoryParser, RejectsATensorWhosePayloadLiesOutsideTheFile) {
+    // Three branches: the aligned data start itself lies past EOF; the
+    // declared offset runs past the data section; the stored length does.
+    struct Case {
+        std::uint64_t offset;
+        bool data_start_only;
+        std::string tag;
+    };
+    const std::array<Case, 3> cases = {Case{0, false, "no-payload"}, Case{64, true, "offset-past"},
+                                       Case{0, true, "length-past"}};
+    for (const Case& entry : cases) {
+        std::vector<std::uint8_t> bytes = header(1, 0);
+        put64(bytes, 2); // name length
+        bytes.push_back('t');
+        bytes.push_back('0');
+        put32(bytes, 2); // rank
+        put64(bytes, 2);
+        put64(bytes, 2);
+        put32(bytes, 0); // ggml type F32
+        put64(bytes, entry.offset);
+        if (entry.data_start_only) pad_for_payload(bytes, 0);
+        const std::string path = write_temp(bytes, "payload-" + entry.tag);
+        const auto inventory = read_inventory(path);
+        std::remove(path.c_str());
+        ASSERT_FALSE(inventory.has_value()) << entry.tag << " accepted";
+        EXPECT_EQ(inventory.error(), "tensor data outside file");
+    }
+}
+
+TEST(InventoryParser, LayerCountTakesTheHighestBlockIndex) {
+    const std::vector<skippy::probe::TensorInfo> tensors = {
+        tensor("token_embd.weight"),      tensor("blk.0.attn_q.weight"),
+        tensor("blk.12.mlp_down.weight"), tensor("blk.3.output_norm.weight"),
+        tensor("root.blk.7.norm.weight"), // counts: after a separator
+    };
+    EXPECT_EQ(skippy::probe::layer_count_from(tensors), 13);
+}
+
+TEST(InventoryParser, LayerCountSkipsMalformedNames) {
+    const std::vector<skippy::probe::TensorInfo> tensors = {
+        tensor("blk..weight"),                     // empty index
+        tensor("blk.abc.weight"),                  // non-numeric
+        tensor("blk.-2.weight"),                   // negative
+        tensor("blk.99999999999999999999.weight"), // past int64
+        tensor("xxblk.9.weight"),                  // no separator before blk.
+        tensor("blk.9223372036854775807.weight"),  // INT64_MAX: +1 would overflow
+    };
+    EXPECT_EQ(skippy::probe::layer_count_from(tensors), 0);
 }
 
 TEST(InventoryParser, CheckedTensorBytesMultipliesOnlyTheRemainingExtents) {

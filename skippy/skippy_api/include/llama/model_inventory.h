@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdint>
 #include <cstring>
 #include <expected>
@@ -272,6 +273,12 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
         if (*key == "general.alignment" && type == 4) {
             std::uint32_t value = 0;
             if (auto ok = reader.read(value); !ok) return std::unexpected(ok.error());
+            // Zero divides by zero at the data-start round-up and a value
+            // that is not a power of two misaligns every tensor offset the
+            // native loader computes; upstream requires a power of two.
+            if (value == 0U || (value & (value - 1U)) != 0U) {
+                return std::unexpected("invalid general.alignment");
+            }
             alignment = value;
             continue;
         }
@@ -385,7 +392,15 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_inventory(const 
     // The native loader reports absolute file offsets: data section start
     // plus the tensor record's relative offset.
     const std::uint64_t data_start = (reader.tell() + alignment - 1) / alignment * alignment;
+    const auto file_size = static_cast<std::uint64_t>(mapping.size());
     for (TensorInfo& tensor : *tensors) {
+        // Payload bounds are checked per tensor so an empty inventory stays
+        // valid: its aligned data start lies past the short header, but
+        // there is no payload to lie outside the file.
+        if (data_start > file_size || tensor.offset > file_size - data_start ||
+            tensor.stored_length > file_size - data_start - tensor.offset) {
+            return std::unexpected("tensor data outside file");
+        }
         tensor.offset += data_start;
     }
     // Package tensor ids must be strictly increasing.
@@ -526,15 +541,28 @@ inline std::expected<std::string, std::string> model_architecture(const std::str
     return architecture;
 }
 
+/// Highest `blk.N.` index plus one, over the file's tensor names. The
+/// names are file-controlled: `blk.` counts only at the start of a name or
+/// after a `.` separator, the index is parsed with `from_chars` bounded by
+/// the next separator, and anything malformed — empty, non-numeric,
+/// negative, or out of range — is skipped, never thrown.
 inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
     std::int64_t layers = 0;
     for (const TensorInfo& tensor : tensors) {
         const auto position = tensor.name.rfind("blk.");
         if (position == std::string::npos) continue;
-        const auto dot = tensor.name.find('.', position);
-        if (dot == std::string::npos) continue;
-        layers = std::max<std::int64_t>(
-            layers, std::stoll(tensor.name.substr(position + 4, dot - position - 4)) + 1);
+        if (position != 0 && tensor.name[position - 1] != '.') continue;
+        const auto dot = tensor.name.find('.', position + 4);
+        const auto end = dot == std::string::npos ? tensor.name.size() : dot;
+        const char* first = tensor.name.data() + position + 4;
+        const char* last = tensor.name.data() + end;
+        std::int64_t block = 0;
+        const auto [pointer, code] = std::from_chars(first, last, block);
+        if (code != std::errc{} || pointer != last || block < 0 ||
+            block == std::numeric_limits<std::int64_t>::max()) {
+            continue;
+        }
+        layers = std::max<std::int64_t>(layers, block + 1);
     }
     return layers;
 }
