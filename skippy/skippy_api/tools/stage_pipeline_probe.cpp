@@ -364,13 +364,19 @@ int main(int argc, char** argv) {
     std::cout << "tokens: " << tokens->size() << "\n";
 
     // Chain: stage 0 sees no input, each later stage consumes the previous one.
+    // The chain and the reference below both predict the token after the text,
+    // so every prefill takes the context without the final token and the final
+    // token is decoded exactly once, by predict_chain.
+    const std::vector<llama_token> context(tokens->begin(), tokens->end() - 1);
+    const llama_token next = tokens->back();
+
     const skippy_activation_desc* input_desc = nullptr;
     const std::uint8_t* input = nullptr;
     std::vector<std::uint8_t> carried;
     for (int index = 0; index < stage_count; ++index) {
         Stage& stage = stages[static_cast<std::size_t>(index)];
         const auto start = Clock::now();
-        if (!run_stage(stage, *tokens, input_desc, input)) return 1;
+        if (!run_stage(stage, context, input_desc, input)) return 1;
         std::cout << "stage " << index << " [" << stage.range.start << ", " << stage.range.end
                   << "): " << payload_size(stage) << " bytes in " << millis(start) << " ms\n";
         carried = stage.output;
@@ -384,14 +390,12 @@ int main(int argc, char** argv) {
     // terminal payload as the chain.
     Stage monolithic;
     if (!open_stage(*planner, path, skippy::LayerRange{0, layers}, monolithic)) return 1;
-    if (!run_stage(monolithic, *tokens, nullptr, nullptr)) return 1;
+    if (!run_stage(monolithic, context, nullptr, nullptr)) return 1;
     std::cout << "single stage: " << payload_size(monolithic) << " bytes\n";
     std::cout << "chain vs single: " << compare(stages.back().output, monolithic.output) << "\n";
     // Numeric equivalence: the terminal stage must predict the same next token
-    // as an unstaged model given the same context.
-    const std::vector<llama_token> context(tokens->begin(), tokens->end() - 1);
-    const llama_token next = tokens->back();
-
+    // as an unstaged model given the same context. Both prefilled `context`
+    // above, so both decode `next` as the Nth position here.
     const auto chain_token = predict_chain(stages, next);
     if (!chain_token) {
         std::cerr << "chain predict: " << chain_token.error() << "\n";
