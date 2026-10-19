@@ -1,7 +1,9 @@
 //! Exercises the full stack against real GGUF files. The C++ side has no
 //! llama-dependent tests by design; this is where that coverage lives.
 //!
-//!   SKIPPY_TEST_MODEL     an embedding model (e.g. a nomic/bge/e5 GGUF)
+//!   SKIPPY_TEST_MODEL     a BERT-family embedder GGUF (e.g. all-MiniLM-L6-v2;
+//!                         end_to_end asserts the Bert family, so nomic/e5
+//!                         GGUFs fail there and are not supported fixtures)
 //!   SKIPPY_TEST_RERANKER  optional; a reranker with one classifier output
 //!
 //! Tests that need a file skip when its variable is unset.
