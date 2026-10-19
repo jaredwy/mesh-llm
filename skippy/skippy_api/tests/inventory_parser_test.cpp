@@ -234,4 +234,41 @@ TEST(InventoryParser, RejectsADimensionPastInt64) {
     ASSERT_FALSE(inventory.has_value());
 }
 
+TEST(InventoryParser, Sha256StreamsInFixedReads) {
+    // Package identity hashes the shard, so it must not depend on the file
+    // fitting anywhere: digests are pinned across the 1 MiB read boundary,
+    // exactly on it, and on both SHA-256 padding shapes (56- and 63-byte
+    // tails). Expected values come from an independent hashlib run.
+    const auto pattern = [](std::size_t size) {
+        std::vector<std::uint8_t> bytes(size);
+        for (std::size_t index = 0; index < size; ++index) {
+            bytes[index] = static_cast<std::uint8_t>(index % 251U);
+        }
+        return bytes;
+    };
+    struct Case {
+        std::vector<std::uint8_t> bytes;
+        const char* digest;
+    };
+    const std::array cases = {
+        Case{std::vector<std::uint8_t>{},
+             "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        Case{{'a', 'b', 'c'},
+             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+        Case{pattern(56),
+             "sha256:da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562"},
+        Case{pattern(1U << 20U),
+             "sha256:631b84027d6b9e52b539c4e8373622d23032dfadc64d60af87339c9037e4f769"},
+        Case{pattern((1U << 20U) + 63U),
+             "sha256:f9605ee85813a4764ead84bf52043de51690ab7f08835b190fb3447f28f3a7aa"},
+        Case{pattern(2U * (1U << 20U) + 55U),
+             "sha256:03ed671717bf4fb9fe4e709e566c5ebd5531c7303864904539d384fc7729a4bd"},
+    };
+    for (const Case& entry : cases) {
+        const std::string path = write_temp(entry.bytes, "sha256-stream");
+        EXPECT_EQ(skippy::probe::sha256_of(path), entry.digest) << "size " << entry.bytes.size();
+        std::remove(path.c_str());
+    }
+}
+
 } // namespace

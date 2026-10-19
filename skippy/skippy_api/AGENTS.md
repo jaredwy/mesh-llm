@@ -378,6 +378,17 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
 - **Medians of five lie on fixed-cost rows.** Use
   `--benchmark_repetitions=15 --benchmark_enable_random_interleaving=true` and
   read `_min`.
+- **A digest that materialises the file materialises the model.** `sha256_of`
+  read the whole shard into a `std::vector` and then appended the SHA padding
+  to it, so the first plan of a file version — reachable from
+  `StageChain::open` through `plan_model_stages` — allocated the entire model
+  (30 GB for a 30 GB GGUF) just to feed a hash, and could OOM the process.
+  Every fixture in the mocked suite is a few hundred KB, so no test could see
+  it. Rule: anything whose work is proportional to the file (digests, scans)
+  streams through one fixed buffer sized independently of the file — 1 MiB
+  reads, 64-byte blocks compressed as they arrive, and only the final short
+  read gets padding. `InventoryParser.Sha256StreamsInFixedReads` pins digests
+  across the read boundary, exactly on it, and on both padding shapes.
 - **`rust::String` requires UTF-8.** Planner identities are **binary**
   (`resident_tensor_at_v1` returns an identity, not a name). Hex-encode them.
 - **cxx cannot hold a non-copyable C++ object by value.** Use `UniquePtr<T>`,
