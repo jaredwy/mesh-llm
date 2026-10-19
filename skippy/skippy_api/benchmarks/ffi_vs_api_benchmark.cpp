@@ -469,7 +469,10 @@ struct Harness {
         std::vector<float> ffi_output(dimensions);
         std::vector<float> api_output(dimensions);
         const auto sample = tokens(64);
-        if (!embed_ffi(sample, ffi_output) || !embed_api(sample, api_output)) return false;
+        if (!embed_ffi(sample, ffi_output) || !embed_api(sample, api_output)) {
+            error = last_error;
+            return false;
+        }
 
         float difference = 0.0F;
         for (std::size_t i = 0; i < dimensions; ++i) {
@@ -720,7 +723,7 @@ template <bool UseFfi> void BatchEmbed(benchmark::State& state) {
 
     if constexpr (!UseFfi) {
         if (!harness->ensure_batch_session(sequences)) {
-            state.SkipWithError(harness->error.c_str());
+            state.SkipWithError(harness->last_error.c_str());
             return;
         }
         if (!harness->embed_api(tokens, single) || !harness->embed_batch_api(inputs, output)) {
@@ -784,7 +787,7 @@ template <bool UseFfi> void RerankBatch(benchmark::State& state) {
 
     if constexpr (!UseFfi) {
         if (!harness->ensure_batch_session(static_cast<std::uint32_t>(documents_count))) {
-            state.SkipWithError(harness->error.c_str());
+            state.SkipWithError(harness->last_error.c_str());
             return;
         }
         // Agreement gate: the first document must score the same either way.

@@ -253,14 +253,11 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
         }
         // The facade materialises the profile's own identities too.
         // All seven: the facade reads the same identity set per profile, so a
-        // loop that skipped three would compare unlike work.
+        // loop that skipped any would compare unlike work.
         read(profile.profile_id);
         read(profile.graph_identity);
         read(profile.profile_identity);
         read(profile.slice_identity);
-        read(profile.source_snapshot_identity);
-        read(profile.graph_configuration_id);
-        read(profile.backend_id);
         read(profile.source_snapshot_identity);
         read(profile.graph_configuration_id);
         read(profile.backend_id);
@@ -273,6 +270,7 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
                 if (skippy_stage_plan_value_at_v1(plan, index, kind, slot, &value, &error) ==
                     SKIPPY_STATUS_OK) {
                     read(value.identity);
+                    read(value.binding);
                 } else if (error != nullptr) {
                     skippy_error_free(error);
                 }
@@ -502,14 +500,30 @@ void validate(benchmark::State& state, bool use_api) {
             }
             plans.push_back(std::move(*plan));
         }
+        // Time only successful validation: a failing loop would measure the
+        // error path, not the check. validate_chain returns the failure as
+        // an engaged optional, so success is the empty one.
+        if (skippy::validate_chain(plans).has_value()) {
+            state.SkipWithError("chain validation failed");
+            return;
+        }
         for (auto _ : state) {
-            validated = skippy::validate_chain(plans).has_value() ? 1 : 0;
+            validated = skippy::validate_chain(plans).has_value() ? 0 : 1;
             benchmark::DoNotOptimize(&validated);
         }
         return;
     }
 
     skippy_stage_plan* plans[] = {first.cached_native(), second.cached_native()};
+    {
+        skippy_error* error = nullptr;
+        const auto status = skippy_stage_plan_validate_chain_v1(plans, 2, &error);
+        if (error != nullptr) skippy_error_free(error);
+        if (status != SKIPPY_STATUS_OK) {
+            state.SkipWithError("chain validation failed");
+            return;
+        }
+    }
     for (auto _ : state) {
         skippy_error* error = nullptr;
         const auto status = skippy_stage_plan_validate_chain_v1(plans, 2, &error);

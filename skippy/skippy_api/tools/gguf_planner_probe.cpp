@@ -13,6 +13,7 @@
 
 #include "llama/backend.h"
 #include "llama/stage_planner.h"
+#include "llama/staged.h"
 #include "stage_load.h"
 
 #include <algorithm>
@@ -164,31 +165,34 @@ int main(int argc, char** argv) {
             std::cout << "staged open: config rejected (" << static_cast<int>(load.error())
                       << ")\n";
         } else {
+            // The plan borrows its strings from an arena; the loader wants
+            // NUL-terminated C strings, so own() them before converting.
+            const auto spec = skippy::llama::own(*load);
             auto config = skippy_runtime_config_default();
-            config.stage_index = load->stage_index;
-            config.layer_start = load->layers.start;
-            config.layer_end = load->layers.end;
+            config.stage_index = spec.stage_index;
+            config.layer_start = spec.layers.start;
+            config.layer_end = spec.layers.end;
             config.ctx_size = 512;
             config.n_batch = 512;
             config.n_ubatch = 512;
             config.n_gpu_layers = 999;
             config.load_mode = SKIPPY_LOAD_MODE_LAYER_PACKAGE;
-            config.execution_contract = load->execution_contract.data();
+            config.execution_contract = spec.execution_contract.c_str();
 
             std::vector<const char*> residents;
-            for (const std::string_view name : load->resident_identities) {
-                residents.push_back(name.data());
+            for (const std::string& name : spec.resident_identities) {
+                residents.push_back(name.c_str());
             }
             config.resident_tensor_names = residents.empty() ? nullptr : residents.data();
             config.resident_tensor_name_count = residents.size();
 
             std::vector<const char*> import_ids;
             std::vector<const char*> import_bindings;
-            for (const std::string_view name : load->activation_import_identities) {
-                import_ids.push_back(name.data());
+            for (const std::string& name : spec.import_identities) {
+                import_ids.push_back(name.c_str());
             }
-            for (const std::string_view name : load->activation_import_bindings) {
-                import_bindings.push_back(name.data());
+            for (const std::string& name : spec.import_bindings) {
+                import_bindings.push_back(name.c_str());
             }
             config.activation_import_identities = import_ids.empty() ? nullptr : import_ids.data();
             config.activation_import_identity_count = import_ids.size();
@@ -197,11 +201,11 @@ int main(int argc, char** argv) {
 
             std::vector<const char*> export_ids;
             std::vector<const char*> export_bindings;
-            for (const std::string_view name : load->activation_export_identities) {
-                export_ids.push_back(name.data());
+            for (const std::string& name : spec.export_identities) {
+                export_ids.push_back(name.c_str());
             }
-            for (const std::string_view name : load->activation_export_bindings) {
-                export_bindings.push_back(name.data());
+            for (const std::string& name : spec.export_bindings) {
+                export_bindings.push_back(name.c_str());
             }
             config.activation_export_identities = export_ids.empty() ? nullptr : export_ids.data();
             config.activation_export_identity_count = export_ids.size();
