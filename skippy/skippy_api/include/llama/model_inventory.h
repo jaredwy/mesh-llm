@@ -510,8 +510,8 @@ inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
         if (position == std::string::npos) continue;
         const auto dot = tensor.name.find('.', position);
         if (dot == std::string::npos) continue;
-        layers =
-            std::max<std::int64_t>(layers, std::stoll(tensor.name.substr(position + 4, dot - position - 4)) + 1);
+        layers = std::max<std::int64_t>(
+            layers, std::stoll(tensor.name.substr(position + 4, dot - position - 4)) + 1);
     }
     return layers;
 }

@@ -4,8 +4,8 @@
 /// session, workload info. It prints rather than asserts so a failure shows
 /// the native message instead of a stack trace.
 
-#include "llama/model_inventory.h"
 #include "llama/backend.h"
+#include "llama/model_inventory.h"
 #include "llama/stage_planner.h"
 #include "llama/staged.h"
 
