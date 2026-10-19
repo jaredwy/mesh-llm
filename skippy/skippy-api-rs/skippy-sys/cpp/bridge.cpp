@@ -270,6 +270,32 @@ rust::String hex_of(std::string_view value) {
   return rust::String(std::move(out));
 }
 
+/// Splits [0, layers) into `stage_count` contiguous ranges. Both inputs are
+/// bounded before any reserve: a caller-supplied stage count past the
+/// model's layer count is a typed rejection, not a giant allocation or a
+/// pile of zero-width stages (never allocate blind — AGENTS.md).
+std::expected<std::vector<skippy::LayerRange>, std::string>
+split_layers(std::int32_t layers, std::uint32_t stage_count) {
+  if (stage_count == 0)
+    return std::unexpected("a split needs at least one stage");
+  if (layers <= 0)
+    return std::unexpected("the model has no layers");
+  if (stage_count > static_cast<std::uint32_t>(layers))
+    return std::unexpected("stage count exceeds the model's layer count");
+  const auto count = static_cast<std::int32_t>(stage_count);
+  std::vector<skippy::LayerRange> ranges;
+  ranges.reserve(stage_count);
+  const std::int32_t base = layers / count;
+  const std::int32_t remainder = layers % count;
+  std::int32_t start = 0;
+  for (std::int32_t index = 0; index < count; ++index) {
+    const std::int32_t width = base + (index < remainder ? 1 : 0);
+    ranges.push_back(skippy::LayerRange{start, start + width});
+    start += width;
+  }
+  return ranges;
+}
+
 } // namespace
 
 rust::Vec<StagePlanInfo>
@@ -292,22 +318,12 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
     return fail(inventory.error());
     const auto layers =
     static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
-
-    std::vector<skippy::LayerRange> ranges;
-    ranges.reserve(stage_count);
-    const std::int32_t base = layers / static_cast<std::int32_t>(stage_count);
-    const std::int32_t remainder =
-    layers % static_cast<std::int32_t>(stage_count);
-    std::int32_t start = 0;
-    for (std::uint32_t index = 0; index < stage_count; ++index) {
-    const std::int32_t width =
-    base + (static_cast<std::int32_t>(index) < remainder ? 1 : 0);
-    ranges.push_back(skippy::LayerRange{start, start + width});
-    start += width;
-    }
+    const auto ranges = split_layers(layers, stage_count);
+    if (!ranges)
+    return fail(ranges.error());
 
     auto lease =
-    skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, ranges);
+    skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, *ranges);
     if (!lease)
     return fail(lease.error().message);
     // The lease pins the plans these configs borrow from; it lives as long as
@@ -384,28 +400,18 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
       return result;
       }
       const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
-      if (stages == 0) {
-      result.error = rust::String("a split needs at least one stage");
+      const auto ranges = split_layers(layers, stages);
+      if (!ranges) {
+      result.error = rust::String(ranges.error());
       return result;
       }
-
-      std::vector<skippy::LayerRange> ranges;
-      ranges.reserve(stages);
-      const std::int32_t base = layers / static_cast<std::int32_t>(stages);
-      const std::int32_t remainder = layers % static_cast<std::int32_t>(stages);
-      std::int32_t start = 0;
-      for (std::uint32_t slot = 0; slot < stages; ++slot) {
-      const std::int32_t width = base + (static_cast<std::int32_t>(slot) < remainder ? 1 : 0);
-      ranges.push_back(skippy::LayerRange{start, start + width});
-      start += width;
-      }
-      if (index >= ranges.size()) {
+      if (index >= ranges->size()) {
       result.error = rust::String("stage index is out of range");
       return result;
       }
 
       auto lease =
-      skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, ranges);
+      skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, *ranges);
       if (!lease) {
       result.error = rust::String(lease.error().message);
       return result;
@@ -499,23 +505,14 @@ ChainValidation Bridge::validate_chain(rust::Str path,
     }
     const auto layers =
     static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
-
-    std::vector<skippy::LayerRange> ranges;
-    ranges.reserve(stage_count);
-    const std::int32_t base =
-    layers / static_cast<std::int32_t>(stage_count == 0 ? 1 : stage_count);
-    const std::int32_t remainder =
-    layers % static_cast<std::int32_t>(stage_count == 0 ? 1 : stage_count);
-    std::int32_t start = 0;
-    for (std::uint32_t index = 0; index < stage_count; ++index) {
-    const std::int32_t width =
-    base + (static_cast<std::int32_t>(index) < remainder ? 1 : 0);
-    ranges.push_back(skippy::LayerRange{start, start + width});
-    start += width;
+    const auto ranges = split_layers(layers, stage_count);
+    if (!ranges) {
+    result.error = rust::String(ranges.error());
+    return result;
     }
 
     auto plans =
-    skippy::llama::plan_model_plans(impl_->runtime.backend(), model_path, ranges);
+    skippy::llama::plan_model_plans(impl_->runtime.backend(), model_path, *ranges);
     if (!plans) {
     result.error = rust::String(plans.error().message);
     return result;
@@ -770,47 +767,64 @@ struct CopyingSink {
 
 ChainResult Bridge::open_chain(rust::Str path,
                                rust::Slice<const std::int32_t> ranges) noexcept {
-  ChainResult result{};
-  result.ok = false;
-  result.chain = std::make_unique<StageChainHandle>();
+  try {
+    ChainResult result{};
+    result.ok = false;
+    result.chain = std::make_unique<StageChainHandle>();
 
-  if (ranges.size() % 2 != 0) {
-    result.error = rust::String("ranges must be start/end pairs");
+    if (ranges.size() % 2 != 0) {
+      result.error = rust::String("ranges must be start/end pairs");
+      return result;
+    }
+    std::vector<skippy::LayerRange> layers;
+    layers.reserve(ranges.size() / 2);
+    for (std::size_t index = 0; index + 1 < ranges.size(); index += 2) {
+      layers.push_back(skippy::LayerRange{ranges[index], ranges[index + 1]});
+    }
+    auto chain = skippy::llama::StageChain::open(std::string(path), layers);
+    if (!chain) {
+      result.error = rust::String(chain.error().message);
+      return result;
+    }
+    result.chain = std::make_unique<StageChainHandle>(std::move(*chain));
+    result.ok = true;
     return result;
+  } catch (const std::bad_alloc &) {
+    return in_band_failed<ChainResult>("open_chain: out of memory");
+  } catch (const std::exception &failure) {
+    return in_band_failed<ChainResult>(std::string("open_chain: ") + failure.what());
+  } catch (...) {
+    return in_band_failed<ChainResult>("open_chain: unknown failure");
   }
-  std::vector<skippy::LayerRange> layers;
-  layers.reserve(ranges.size() / 2);
-  for (std::size_t index = 0; index + 1 < ranges.size(); index += 2) {
-    layers.push_back(skippy::LayerRange{ranges[index], ranges[index + 1]});
-  }
-  auto chain = skippy::llama::StageChain::open(std::string(path), layers);
-  if (!chain) {
-    result.error = rust::String(chain.error().message);
-    return result;
-  }
-  result.chain = std::make_unique<StageChainHandle>(std::move(*chain));
-  result.ok = true;
-  return result;
 }
 
 ChainRunResult Bridge::run_chain(StageChainHandle &chain,
                                  rust::Slice<const std::int32_t> tokens) noexcept {
-  ChainRunResult result{};
-  result.ok = false;
-  result.has_frame = false;
+  try {
+    ChainRunResult result{};
+    result.ok = false;
+    result.has_frame = false;
 
-  std::vector<llama_token> native(tokens.begin(), tokens.end());
-  CopyingSink sink;
-  if (auto failure = chain.get().prefill(native, sink); failure.has_value()) {
-    result.error = rust::String(failure->message);
+    std::vector<llama_token> native(tokens.begin(), tokens.end());
+    CopyingSink sink;
+    if (auto failure = chain.get().prefill(native, sink); failure.has_value()) {
+      result.error = rust::String(failure->message);
+      return result;
+    }
+    result.has_frame = !sink.bytes.empty();
+    result.frame.reserve(sink.bytes.size());
+    for (const std::uint8_t byte : sink.bytes) {
+      result.frame.push_back(byte);
+    }
+    result.ok = true;
     return result;
+  } catch (const std::bad_alloc &) {
+    return in_band_failed<ChainRunResult>("run_chain: out of memory");
+  } catch (const std::exception &failure) {
+    return in_band_failed<ChainRunResult>(std::string("run_chain: ") + failure.what());
+  } catch (...) {
+    return in_band_failed<ChainRunResult>("run_chain: unknown failure");
   }
-  result.has_frame = !sink.bytes.empty();
-  for (const std::uint8_t byte : sink.bytes) {
-    result.frame.push_back(byte);
-  }
-  result.ok = true;
-  return result;
 }
 
 } // namespace skippy::ffi
