@@ -384,11 +384,13 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
   `StageChain::open` through `plan_model_stages` — allocated the entire model
   (30 GB for a 30 GB GGUF) just to feed a hash, and could OOM the process.
   Every fixture in the mocked suite is a few hundred KB, so no test could see
-  it. Rule: anything whose work is proportional to the file (digests, scans)
-  streams through one fixed buffer sized independently of the file — 1 MiB
-  reads, 64-byte blocks compressed as they arrive, and only the final short
-  read gets padding. `InventoryParser.Sha256StreamsInFixedReads` pins digests
-  across the read boundary, exactly on it, and on both padding shapes.
+  it. Rule: nothing that touches a whole shard may allocate in proportion to
+  it — hash and scan through the same read-only `Mapping` the header parser
+  uses (pages fault in from the page cache; an invalid mapping hashes as
+  empty, matching the old stream behaviour), padding only the final partial
+  block in a fixed 128-byte tail.
+  `InventoryParser.Sha256MatchesReferenceDigests` pins digests against
+  hashlib on both padding shapes.
 - **`rust::String` requires UTF-8.** Planner identities are **binary**
   (`resident_tensor_at_v1` returns an identity, not a name). Hex-encode them.
 - **cxx cannot hold a non-copyable C++ object by value.** Use `UniquePtr<T>`,

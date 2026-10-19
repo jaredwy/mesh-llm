@@ -370,12 +370,15 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_inventory(const 
     return tensors;
 }
 
-// Package identity is the content hash, so the probe hashes the shard. The
-// shard is hashed in fixed 1 MiB reads: materialising the whole file would
-// allocate the model itself (tens of gigabytes) just to feed a digest, and
-// the small fixtures the tests use would never show it.
+// Package identity is the content hash, so the probe hashes the shard. It
+// reuses the header parser's Mapping: pages fault in from the page cache and
+// nothing heap-sized is allocated, so a multi-gigabyte shard is hashed
+// without ever materialising it — which the small test fixtures would
+// never have shown.
 inline std::string sha256_of(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
+    const Mapping mapping(path);
+    const auto* data = static_cast<const std::uint8_t*>(mapping.data());
+    const std::size_t size = mapping.size();
     static constexpr std::array<std::uint32_t, 64> k = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -437,34 +440,23 @@ inline std::string sha256_of(const std::string& path) {
         h[6] += g;
         h[7] += hh;
     };
-    // One fixed read buffer, independent of file size. A short read is the
-    // end of the file, so only the final fragment needs SHA-256 padding.
-    constexpr std::size_t kChunk = 1U << 20U;
-    std::vector<std::uint8_t> chunk(kChunk);
-    std::uint64_t total = 0;
-    while (true) {
-        file.read(reinterpret_cast<char*>(chunk.data()), static_cast<std::streamsize>(kChunk));
-        const auto got = static_cast<std::size_t>(file.gcount());
-        total += got;
-        const std::size_t whole = got / 64U * 64U;
-        for (std::size_t offset = 0; offset < whole; offset += 64U) {
-            compress(chunk.data() + offset);
-        }
-        if (got == kChunk) continue;
-        const std::size_t tail = got - whole;
-        std::array<std::uint8_t, 128> last{};
-        std::copy_n(chunk.begin() + static_cast<std::ptrdiff_t>(whole), tail, last.begin());
-        last[tail] = 0x80U;
-        const std::size_t padded = tail < 56U ? 64U : 128U;
-        const std::uint64_t bit_length = total * 8U;
-        for (std::size_t index = 0; index < 8U; ++index) {
-            last[padded - 8U + index] =
-                static_cast<std::uint8_t>(bit_length >> (56U - (index * 8U)));
-        }
-        for (std::size_t offset = 0; offset < padded; offset += 64U) {
-            compress(last.data() + offset);
-        }
-        break;
+    // Whole blocks compress straight off the mapping; only the final
+    // partial block is padded, in a fixed 128-byte tail.
+    const std::size_t whole = size / 64U * 64U;
+    for (std::size_t offset = 0; offset < whole; offset += 64U) {
+        compress(data + offset);
+    }
+    const std::size_t tail = size - whole;
+    std::array<std::uint8_t, 128> last{};
+    std::copy_n(data + whole, tail, last.begin());
+    last[tail] = 0x80U;
+    const std::size_t padded = tail < 56U ? 64U : 128U;
+    const std::uint64_t bit_length = static_cast<std::uint64_t>(size) * 8U;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        last[padded - 8U + index] = static_cast<std::uint8_t>(bit_length >> (56U - (index * 8U)));
+    }
+    for (std::size_t offset = 0; offset < padded; offset += 64U) {
+        compress(last.data() + offset);
     }
     static constexpr std::string_view kHex = "0123456789abcdef";
     std::string digest = "sha256:";

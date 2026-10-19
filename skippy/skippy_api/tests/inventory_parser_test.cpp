@@ -234,11 +234,11 @@ TEST(InventoryParser, RejectsADimensionPastInt64) {
     ASSERT_FALSE(inventory.has_value());
 }
 
-TEST(InventoryParser, Sha256StreamsInFixedReads) {
-    // Package identity hashes the shard, so it must not depend on the file
-    // fitting anywhere: digests are pinned across the 1 MiB read boundary,
-    // exactly on it, and on both SHA-256 padding shapes (56- and 63-byte
-    // tails). Expected values come from an independent hashlib run.
+TEST(InventoryParser, Sha256MatchesReferenceDigests) {
+    // Package identity hashes the whole shard through the same mapping the
+    // header parser uses. Digests are pinned against an independent hashlib
+    // run, covering both SHA-256 padding shapes (56- and 63-byte tails) and
+    // multi-megabyte files that dwarf every other fixture in this suite.
     const auto pattern = [](std::size_t size) {
         std::vector<std::uint8_t> bytes(size);
         for (std::size_t index = 0; index < size; ++index) {
