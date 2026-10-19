@@ -278,7 +278,7 @@ skippy-llama-api-ffi-bench-compare model="" *ARGS="":
     model="$1"
     shift
     while [[ $# -gt 0 && -z "$1" ]]; do shift; done
-    report="$(mktemp -t skippy-ffi-vs-api)"
+    report="$(mktemp "${TMPDIR:-/tmp}/skippy-ffi-vs-api.XXXXXX")"
     trap 'rm -f "$report"' EXIT
     just skippy-llama-api-ffi-bench "$model" \
       --benchmark_format=json \
@@ -308,9 +308,9 @@ skippy-llama-api-planner-probe model *ARGS="":
 skippy-api-verify embed_model="" reranker_model="" *ARGS="":
     #!/usr/bin/env bash
     set -euo pipefail
-    embed="$1"
+    embed="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
-    reranker="$1"
+    reranker="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     printf '%s\n' '== clang-format' >&2
     just skippy-llama-api-format-check
@@ -365,9 +365,9 @@ skippy-api-checkpoint message="" embed_model="" reranker_model="":
 skippy-api-rs-e2e embed_model="" reranker_model="" *ARGS="":
     #!/usr/bin/env bash
     set -euo pipefail
-    embed="$1"
+    embed="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
-    reranker="$1"
+    reranker="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     while [[ $# -gt 0 && -z "$1" ]]; do shift; done
     if [[ -d /opt/homebrew/opt/lld/bin ]]; then
@@ -414,13 +414,14 @@ skippy-ab case="" model="":
         echo "  work belongs in skippy/llama_cpp/patches, not in skippy_api (see AGENTS.md)"
         exit 0
     fi
-    if [ -z "{{ model }}" ]; then
+    if [ -z "${2-}" ]; then
         echo "{{ case }} needs a model: just skippy-ab {{ case }} <model.gguf>" >&2
         exit 1
     fi
-    out=$(mktemp -t skippy-ab).json
-    log="${out%.json}.log"
-    if ! SKIPPY_BENCH_MODEL={{ model }} \
+    out=$(mktemp "${TMPDIR:-/tmp}/skippy-ab.XXXXXX")
+    log="${out}.log"
+    trap 'rm -f "$out" "$log"' EXIT
+    if ! SKIPPY_BENCH_MODEL="${2-}" \
         ./target/skippy-llama-api-ffi-bench/skippy_api_ffi_benchmarks \
         --benchmark_filter="$filter" \
         --benchmark_min_time=0.3s --benchmark_repetitions=5 \
