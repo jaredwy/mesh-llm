@@ -122,10 +122,16 @@ thing that survives it.
 
 - **Wins where we can, parity everywhere else.** Every row in
   `benchmarks/cases.txt` must read `win` or `parity`. A row that loses is a bug
-  to fix or a design cost to justify in writing — `stage_materialize` at 0.80x
-  is documented, not ignored.
+  to fix or a design cost to justify in writing.
 - **Never claim a win the measurement does not support.** If the gate cannot
   prove both sides did the same work, the row does not count.
+- **A recorded number is only true of the tree it was measured on.** Before a
+  push, re-run every manifest row and AGENTS.md figure whose measured path the
+  change could touch, and every row the change itself records; a figure that
+  predates the commits being pushed is wrong even if it was once true.
+  `stage_materialize` sat at `parity` with AGENTS.md quoting 0.80x for two
+  commits after the stored-positions and shared-mapping work had already
+  flipped it to a ~1.2x win — nobody re-measured, so the record lied.
 - **Remove work, do not micro-optimise.** The façade owns tokenisation, batch
   fill, pooling and normalisation; everything else is llama. A change that
   shaves nanoseconds off our layer while the decode dominates is not a result.

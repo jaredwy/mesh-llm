@@ -19,7 +19,7 @@
 10	A	session_create	^SessionCreate/	parity	
 10	A	session_create_cold	^SessionCreateCold	parity	
 2	A	stage_realize	^stage_realize	parity	
-1	A	stage_materialize	^stage_materialize	parity	
+1	A	stage_materialize	^stage_materialize	win	measured 1.242x/1.208x new-faster on 6f9658b8 (MiniLM, 5 interleaved reps each); the recorded 0.80x loss predated the stored-positions and shared-mapping work
 8	A	stage_validate	^stage_validate	win	
 2	B	stage_chain	^stage_chain	pending	native reference fixture not written yet
 9	B	stage_boundary	^stage_boundary	blocked-upstream	needs a prepared-export token entry point: new ABI + per-family work in the patch queue
