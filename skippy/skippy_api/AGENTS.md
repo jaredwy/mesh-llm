@@ -320,6 +320,14 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
   `bad_alloc` out of `noexcept`. Rule: `noexcept` accessors over stored
   positions clamp via pointer arithmetic (`StagePlan::tail`, `view()`), and
   allocations inside failure handlers get their own `catch (...)`.
+- **An FFI result shape `guarded<T>` cannot fold is an unguarded method.**
+  The staged/plan bridge surface returns `ok`+`error` structs (and one
+  `Vec<StagePlanInfo>`), so the `guarded<Result>` status machinery could not
+  wrap them and the methods shipped bare: every `std::string`/`Vec`
+  allocation inside those `noexcept` bodies was a latent terminate. They now
+  catch in-band via `in_band_failed<T>` / `plan_stages_failed`. Rule: a new
+  bridge method is either `guarded<T>`-wrapped or explicitly guarded in-band
+  in the same change.
 - **Do not trust the compiler to catch a polarity flip.** Converting
   `expected<void, E>` → `optional<E>` turns `if (!valid) return valid;` from
   "propagate the failure" into "swallow it". Six tests passed while validation
