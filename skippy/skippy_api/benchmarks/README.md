@@ -107,8 +107,9 @@ median of 9 interleaved repetitions, `--benchmark_min_time=0.2s`:
 | `BatchEmbed/32/8` | 27.9 ms | 2.18 ms | 12.8x |
 | `BatchEmbed/32/128` | 61.9 ms | 25.6 ms | 2.4x |
 | `SessionCreate` | 3.3 µs | 2.4 µs | 1.4x |
-| `SessionCreateCold` | 3.4 µs | 1.65 ms | old wins ~480 000x |
+| `SessionCreateCold` | 3.4 µs | 1.65 ms | old wins ~485x |
 | `ModelLoad` | 18.4 ms | 18.7 ms | tie |
+| `stage_materialize/6` | 2.04 µs | 1.70 µs | 1.2x |
 
 With `bge-reranker-v2-m3-Q4_K_M` (438 MB):
 
@@ -117,7 +118,7 @@ With `bge-reranker-v2-m3-Q4_K_M` (438 MB):
 | `Rerank` (query + document) | 9.47 ms | 9.42 ms | tie |
 | `RerankBatch/8` (one query, 8 docs) | 86.6 ms | 36.1 ms | 2.4x |
 | `SessionCreate` | 3.5 µs | 2.3 µs | 1.5x |
-| `SessionCreateCold` | 3.5 µs | 4.50 ms | old wins ~1 300 000x |
+| `SessionCreateCold` | 3.5 µs | 4.50 ms | old wins ~1 300x |
 | `ModelLoad` | 262.9 ms | 263.4 ms | tie |
 
 ## Reading the numbers
@@ -149,7 +150,7 @@ order/drift bias of running all FFI instances before all API instances.
 | operation | old | new | gap | beyond the noise floor? |
 |---|---|---|---|---|
 | `SessionCreate`, pool can serve | 3.3 µs | 2.4 µs | 1.4x faster | no (facade ahead) |
-| `SessionCreate`, cold geometry | 3.5 µs | 1.65 ms (MiniLM) / 4.50 ms (reranker) | ~10⁶ x | yes |
+| `SessionCreate`, cold geometry | 3.5 µs | 1.65 ms (MiniLM) / 4.50 ms (reranker) | ~485–1 300x | yes |
 | `Tokenize`, 64 chars | 2.47 µs | 2.48 µs | +0.4% | no (fixed: scratch re-arm removed) |
 | `Tokenize`, 4096 chars | 137.2 µs | 137.4 µs | ~0 | no |
 | `Embed` (fit over 1–512 tokens) | 0.890 ms + 4.97 µs/token | 0.894 ms + 4.97 µs/token | +0.4% fixed | no |

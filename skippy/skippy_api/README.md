@@ -35,7 +35,7 @@ benchmarks/         FFI-vs-façade A/B harness and its report
 ## Building and checking
 
 ```bash
-just skippy-llama-api-test            # 133 mocked unit tests
+just skippy-llama-api-test            # mocked unit tests (ctest prints the count)
 just skippy-llama-api-format-check    # clang-format, using .clang-format
 just skippy-llama-api-tidy            # clang-tidy, fails on any finding
 just skippy-llama-api-ffi-bench-compare <model.gguf>

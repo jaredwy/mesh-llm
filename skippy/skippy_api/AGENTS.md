@@ -138,6 +138,19 @@ thing that survives it.
 - **Ask what the old ABI pays.** The retained-context pool, the tokenise scratch
   and the plan cache all came from asking that question rather than from
   profiling our own code.
+- **Never allocate blind.** Nothing allocates in proportion to a file-supplied
+  number until that number is bounded against the file and the domain caps —
+  a GGUF count is bytes on disk, not a size class. Even then be timid: the
+  model behind the header can be tens of gigabytes, so a buffer that looks
+  reasonable per call OOMs the process when it is per layer or per shard.
+  Stream through fixed-size blocks instead of materialising (`sha256_of`'s
+  64-byte loop is the shape), and when a caller-supplied count drives a
+  `reserve`, bound it against the model's real dimensions first
+  (`split_layers` in the bridge is the pattern).
+- **Zero-copy where the data is already on disk.** Read through the header
+  parser's read-only `Mapping` — pages fault in from the page cache and
+  nothing heap-sized is allocated — instead of materialising a second copy
+  of bytes the process already owns.
 
 ### State
 
@@ -283,10 +296,8 @@ just skippy-api-asan                                 # mocked suite under ASan+U
 just skippy-api-verify [embed.gguf] [reranker.gguf]   # format, tidy, ctest, Rust
 just skippy-api-checkpoint "<type(scope): subject>" [embed.gguf] [reranker.gguf]
 just skippy-ab                                        # list A/B cases
-just skippy-ab <case> <model.gguf>                    # run one case
-just skippy-ab <case> <model.gguf>                    # prints WIN/PARITY/LOSS verdict
+just skippy-ab <case> <model.gguf>                    # run one case; prints acceptance= and the measured ratio
 just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
-just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare token
 ```
 
 ## Tooling rules
@@ -317,9 +328,10 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
 
 - **A throwing `std` call inside `noexcept` is `std::terminate` on the worst
   day, and nothing tests it.** The four `StagePlan` value accessors resolved a
-  profile's recorded `{offset, count}` with `std::span::subspan`, which throws
-  `std::out_of_range` when the position is corrupt — out of a `noexcept`
-  function that is a process crash, not an error. Every test passed because
+  profile's recorded `{offset, count}` with `std::span::subspan`. A corrupt
+  position violates its preconditions; C++23 does not specify an exception
+  for this case, so behavior is undefined unless the implementation adds
+  hardening. Every test passed because
   valid plans never hit the branch, and the compiler cannot see the throw.
   Same shape, softer landing: `run_pass`'s catch handler assigned
   `failure.what()` into a `std::string`, so the OOM reporter itself could
