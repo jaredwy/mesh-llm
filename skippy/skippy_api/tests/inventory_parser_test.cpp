@@ -11,18 +11,28 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
 // The parser only needs the byte-size seam; ggml's real implementation is
 // linked into the llama side and exercised by the probes. The mocked suite
-// supplies its own so this target stays native-free.
+// supplies an F32-flavoured mirror of its contract — same rank bounds, same
+// rejection of negative extents and wrapping byte totals — so this target
+// stays native-free while still pinning the parser's typed-error path.
 namespace skippy::probe {
-std::uint64_t row_size_bytes(std::uint32_t, const std::array<std::int64_t, 4>& dimensions,
-                             std::uint32_t rank) {
+std::optional<std::uint64_t>
+row_size_bytes(std::uint32_t, const std::array<std::int64_t, 4>& dimensions, std::uint32_t rank) {
+    if (rank == 0U || rank > 4U) return std::nullopt;
     std::uint64_t bytes = 4; // F32 row element
     for (std::uint32_t dim = 0; dim < rank; ++dim) {
-        bytes *= static_cast<std::uint64_t>(dimensions[dim]);
+        if (dimensions[dim] < 0) return std::nullopt;
+        const auto extent = static_cast<std::uint64_t>(dimensions[dim]);
+        if (extent != 0U && bytes > std::numeric_limits<std::uint64_t>::max() / extent) {
+            return std::nullopt;
+        }
+        bytes *= extent;
     }
     return bytes;
 }
@@ -232,6 +242,42 @@ TEST(InventoryParser, RejectsADimensionPastInt64) {
     const auto inventory = read_inventory(path);
     std::remove(path.c_str());
     ASSERT_FALSE(inventory.has_value());
+}
+
+TEST(InventoryParser, CheckedTensorBytesMultipliesOnlyTheRemainingExtents) {
+    const std::array<std::int64_t, 4> dimensions{999, 4, 5, 7};
+    // The first dimension already sized the row; only 4 * 5 counts at rank 3.
+    EXPECT_EQ(skippy::probe::checked_tensor_bytes(6, dimensions, 3), std::uint64_t{120});
+    EXPECT_EQ(skippy::probe::checked_tensor_bytes(6, dimensions, 1), std::uint64_t{6});
+}
+
+TEST(InventoryParser, CheckedTensorBytesRejectsWrappingAndNegativeExtents) {
+    const std::array<std::int64_t, 4> wraps{0, 16, 0, 0};
+    EXPECT_FALSE(skippy::probe::checked_tensor_bytes(1ULL << 60, wraps, 2).has_value());
+    const std::array<std::int64_t, 4> negative{0, -1, 0, 0};
+    EXPECT_FALSE(skippy::probe::checked_tensor_bytes(6, negative, 2).has_value());
+    const std::array<std::int64_t, 4> zero{0, 0, 0, 0};
+    EXPECT_EQ(skippy::probe::checked_tensor_bytes(6, zero, 2), std::uint64_t{0});
+}
+
+TEST(InventoryParser, RejectsATensorWhoseByteSizeWouldWrap) {
+    // The element product (2^62 * 1) passes the read_extents checks; the
+    // byte total (4 * 2^62) does not. The parser must surface that as a
+    // typed error, never a wrapped stored_length.
+    std::vector<std::uint8_t> bytes = header(1, 0);
+    put64(bytes, 2); // name length
+    bytes.push_back('t');
+    bytes.push_back('0');
+    put32(bytes, 2); // rank
+    put64(bytes, 1ULL << 62);
+    put64(bytes, 1);
+    put32(bytes, 0); // ggml type F32
+    put64(bytes, 0); // offset
+    const std::string path = write_temp(bytes, "byte-wrap");
+    const auto inventory = read_inventory(path);
+    std::remove(path.c_str());
+    ASSERT_FALSE(inventory.has_value());
+    EXPECT_EQ(inventory.error(), "invalid tensor type or size");
 }
 
 TEST(InventoryParser, Sha256MatchesReferenceDigests) {

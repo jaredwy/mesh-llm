@@ -163,12 +163,33 @@ private:
 inline constexpr std::uint64_t kMaxInventoryEntries = 1ULL * 1024U * 1024U;
 inline constexpr std::uint32_t kMaxArrayDepth = 8;
 
-/// Bytes a tensor of `type` occupies given its extents. Declared here,
+/// Multiplies a row's byte size by the extents after the first without
+/// wrapping: a negative extent or a product that would overflow uint64 is
+/// nullopt. Pure so the mocked suite can pin the arithmetic; ggml only
+/// ever sizes the row itself.
+[[nodiscard]] inline std::optional<std::uint64_t>
+checked_tensor_bytes(std::uint64_t row_bytes, const std::array<std::int64_t, 4>& dimensions,
+                     std::uint32_t rank) {
+    for (std::uint32_t dim = 1U; dim < rank && dim < dimensions.size(); ++dim) {
+        if (dimensions[dim] < 0) return std::nullopt;
+        const auto extent = static_cast<std::uint64_t>(dimensions[dim]);
+        if (extent != 0U && row_bytes > std::numeric_limits<std::uint64_t>::max() / extent) {
+            return std::nullopt;
+        }
+        row_bytes *= extent;
+    }
+    return row_bytes;
+}
+
+/// Bytes a tensor of `type` occupies given its extents, or nullopt when
+/// ggml cannot size the record: a type outside the valid domain (removed
+/// slots report a zero block size), a first dimension that is negative or
+/// off the block grid, or a byte total that would wrap. Declared here,
 /// defined against ggml in src/llama/model_inventory.cpp so this header
 /// stays includable from native-free test targets.
-[[nodiscard]] std::uint64_t row_size_bytes(std::uint32_t type,
-                                           const std::array<std::int64_t, 4>& dimensions,
-                                           std::uint32_t rank);
+[[nodiscard]] std::optional<std::uint64_t>
+row_size_bytes(std::uint32_t type, const std::array<std::int64_t, 4>& dimensions,
+               std::uint32_t rank);
 
 /// Fixed widths of the scalar GGUF value types; anything else is a string,
 /// an array, or unknown.
@@ -329,7 +350,9 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& 
         info.dimension_count = record.dimension_count;
         info.dimensions = record.dimensions;
         info.offset = record.offset;
-        info.stored_length = row_size_bytes(record.type, record.dimensions, record.dimension_count);
+        auto bytes = row_size_bytes(record.type, record.dimensions, record.dimension_count);
+        if (!bytes) return std::unexpected("invalid tensor type or size");
+        info.stored_length = *bytes;
         tensors.push_back(std::move(info));
     }
     return tensors;

@@ -377,6 +377,18 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
   real model — while all 213 tests stayed green, because no mocked test
   compares stored_length against a real model. The probe is the only
   witness for file-derived values; run it after touching the parser.
+- **A native sizing call is a process abort, not an error.** `ggml_row_size`
+  trusts its caller: a file-supplied type past `GGML_TYPE_COUNT` reads
+  `type_traits` out of bounds, the removed Q4_2/Q4_3 slots report a zero
+  block size so the call divides by zero, a first dimension off the block
+  grid trips `GGML_ASSERT`, and it multiplies before it divides so its
+  intermediate can wrap even when the true byte count fits. `read_extents`
+  only bounds the *element* product — the *byte* total can wrap past it.
+  `row_size_bytes` therefore validates the whole domain (type in range,
+  block > 0, first dimension non-negative and block-aligned, every product
+  wrap-checked in `checked_tensor_bytes`) and returns nullopt; `read_tensors`
+  turns that into a typed error. Feeding a native helper from file bytes is
+  boundary parsing, and boundary parsing rejects instead of crashing.
 - **A reverted harness silently un-fixes its own fairness.** The like-for-like
   loop above was lost when `benchmarks/` was reset to its committed state
   during a refactor; the row then read 0.7x for an evening while five wrong
