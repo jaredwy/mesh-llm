@@ -9,6 +9,11 @@
  * with the payload of a single stage covering the whole model: if the chain
  * composes, the bytes agree, which is the correctness question a split model
  * actually has.
+ *
+ * The payload check is extended by a K-step greedy continuation: both the
+ * chain and an unstaged reference keep decoding their own predictions, and the
+ * continuations must agree at every step. One matching token is a single
+ * sample; K matching tokens is composition holding under feedback.
  */
 
 #include "llama/model_inventory.h"
@@ -259,7 +264,8 @@ skippy_sampling_config greedy_sampling() {
 /// A non-first slice needs the upstream activation on every call, prefill or
 /// decode, because the runtime keeps no incoming frame between calls.
 std::expected<llama_token, std::string> predict_chain(std::vector<Stage>& stages,
-                                                      llama_token next) {
+                                                      llama_token next,
+                                                      std::vector<std::uint8_t>* terminal_frame) {
     const auto sampling = greedy_sampling();
     const skippy_activation_desc* input_desc = nullptr;
     const void* input = nullptr;
@@ -299,6 +305,7 @@ std::expected<llama_token, std::string> predict_chain(std::vector<Stage>& stages
         input_desc = &stage.output_desc;
         input = carried.data();
     }
+    if (terminal_frame != nullptr) *terminal_frame = carried;
     return predicted;
 }
 
@@ -318,7 +325,8 @@ std::vector<skippy::LayerRange> partition(std::int32_t layers, int count) {
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::cerr
-            << "usage: skippy_api_stage_pipeline_probe <model.gguf> <stages> [layers] [text]\n";
+            << "usage: skippy_api_stage_pipeline_probe <model.gguf> <stages> [layers] [text] "
+               "[steps]\n";
         return 2;
     }
     const std::string path = argv[1];
@@ -417,13 +425,14 @@ int main(int argc, char** argv) {
     if (!run_stage(monolithic, context, nullptr, nullptr)) return 1;
     std::cout << "single stage: " << payload_size(monolithic) << " bytes\n";
     std::cout << "chain vs single: " << compare(stages.back().output, monolithic.output) << "\n";
-    // Numeric equivalence: the terminal stage must predict the same next token
-    // as an unstaged model given the same context. Both prefilled `context`
-    // above, so both decode `next` as the Nth position here.
-    const auto chain_token = predict_chain(stages, next);
-    if (!chain_token) {
-        std::cerr << "chain predict: " << chain_token.error() << "\n";
-        return 1;
+    // K-step greedy continuation: both paths prefilled `context` above, so
+    // step 0 decodes the text's final token on both. Every later step feeds
+    // each path its own prediction back, so the paths stay comparable exactly
+    // as long as they keep agreeing; the run fails at the first divergence.
+    const int steps = argc > 5 ? std::stoi(argv[5]) : 16;
+    if (steps < 1) {
+        std::cerr << "need at least one continuation step\n";
+        return 2;
     }
 
     Stage full;
@@ -445,13 +454,47 @@ int main(int argc, char** argv) {
     std::vector<Stage> one;
     one.reserve(1);
     one.emplace_back(std::move(full));
-    const auto full_token = predict_chain(one, next);
-    if (!full_token) {
-        std::cerr << "full predict: " << full_token.error() << "\n";
-        return 1;
+
+    llama_token chain_feed = next;
+    llama_token full_feed = next;
+    std::vector<llama_token> chain_continuation;
+    std::vector<llama_token> full_continuation;
+    bool diverged = false;
+    for (int step = 0; step < steps; ++step) {
+        std::vector<std::uint8_t> chain_frame;
+        std::vector<std::uint8_t> full_frame;
+        const auto chain_token = predict_chain(stages, chain_feed, &chain_frame);
+        if (!chain_token) {
+            std::cerr << "chain predict: " << chain_token.error() << "\n";
+            return 1;
+        }
+        const auto full_token = predict_chain(one, full_feed, &full_frame);
+        if (!full_token) {
+            std::cerr << "full predict: " << full_token.error() << "\n";
+            return 1;
+        }
+        chain_continuation.push_back(*chain_token);
+        full_continuation.push_back(*full_token);
+        if (*chain_token != *full_token) {
+            std::cout << "step " << step << ": chain=" << *chain_token
+                      << " full=" << *full_token << " -> first divergence\n";
+            diverged = true;
+            break;
+        }
+        std::cout << "step " << step << ": token " << *chain_token << ", terminal frame "
+                  << compare(chain_frame, full_frame) << "\n";
+        chain_feed = *chain_token;
+        full_feed = *full_token;
     }
 
-    std::cout << "next token: chain=" << *chain_token << " full=" << *full_token << " -> "
-              << (*chain_token == *full_token ? "MATCH" : "MISMATCH") << "\n";
-    return *chain_token == *full_token ? 0 : 1;
+    auto render = [](const std::vector<llama_token>& tokens) {
+        std::string text;
+        for (const llama_token token : tokens) text += std::to_string(token) + " ";
+        return text;
+    };
+    std::cout << "chain continuation: " << render(chain_continuation) << "\n";
+    std::cout << "full continuation:  " << render(full_continuation) << "\n";
+    std::cout << steps << "-step greedy continuation: "
+              << (diverged ? "MISMATCH" : "MATCH") << "\n";
+    return diverged ? 1 : 0;
 }
