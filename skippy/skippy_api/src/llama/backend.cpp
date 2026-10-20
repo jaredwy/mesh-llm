@@ -144,7 +144,19 @@ LlamaSession::LlamaSession(llama_context_ptr context, LlamaModel& model, const l
     : context_(std::move(context)), model_(model), vocab_(vocab), workload_(workload),
       rerank_prompt_(model.traits().rerank_prompt ? &*model.traits().rerank_prompt : nullptr),
       decoder_start_(decoder_start), batch_limit_(llama_n_batch(context_.get())),
-      max_tokens_(max_tokens), sequences_(sequences) {}
+      max_tokens_(max_tokens), sequences_(sequences) {
+    // Pre-size the tokenize scratch to the session's whole budget: the first
+    // tokenize on a fresh session then runs in one native call, and
+    // create_session bounds max_tokens by the context's batch, so this is
+    // proportional to memory the context already owns. The -count growth
+    // path remains for over-long text. The constructor is noexcept, and the
+    // pre-size is an optimisation, so a failed allocation falls back to the
+    // growth path instead of escaping.
+    try {
+        native_tokens_.resize(max_tokens_);
+    } catch (...) { // NOLINT(bugprone-empty-catch): pre-size only; growth path recovers
+    }
+}
 
 LlamaSession::~LlamaSession() {
     if (!context_) return;
