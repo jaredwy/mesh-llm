@@ -222,6 +222,10 @@ LlamaSession::process_sequences(std::span<const std::span<const Token>> inputs) 
     std::size_t total = 0;
     for (const auto& input : inputs) {
         if (input.empty()) return std::unexpected(WorkloadError::EmptyInput);
+        // The per-sequence budget too: the total check below cannot see a
+        // 1500-token row in a {512, 4} session, which the single-sequence
+        // path would reject for the same input.
+        if (input.size() > max_tokens_) return std::unexpected(WorkloadError::TooManyTokens);
         total += input.size();
         if (total > static_cast<std::size_t>(max_tokens_) * sequences_) {
             return std::unexpected(WorkloadError::TooManyTokens);

@@ -294,6 +294,21 @@ fn batch_with_an_empty_group_is_rejected() {
     assert_eq!(error, WorkloadError::EmptyInput);
 }
 
+#[test]
+fn batch_input_longer_than_max_tokens_is_rejected() {
+    // The per-sequence budget, not just the total: a 1500-token row inside a
+    // {512, 4} session fits the 2048 total but violates the contract the
+    // single-sequence path enforces - the longest single input is max_tokens.
+    let Some((runtime, path)) = embedder() else { return };
+    let model = runtime.load_model(&path).unwrap();
+    let mut session = model.create_session(SessionConfig { max_tokens: 512, sequences: 4 }).unwrap();
+    let long = tokens(&mut session, &"word ".repeat(600));
+    assert!(long.len() > 512, "the fixture must exceed the per-sequence budget");
+
+    let error = session.embed_batch(&[long.as_slice()]).unwrap_err();
+    assert_eq!(error, WorkloadError::TooManyTokens);
+}
+
 // ---------------------------------------------------------------------------
 // Geometry: the retained-context pool must never hand a session a context it
 // cannot use. Mirrors the backend's take_idle_context key.
