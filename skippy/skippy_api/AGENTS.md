@@ -188,6 +188,14 @@ thing that survives it.
 
 ### Rust
 
+- **`rust::String(const std::string&)` throws on non-UTF-8.** Native failure
+  text — a planner message built from a hostile GGUF's tensor names, say — is
+  arbitrary bytes. Build error strings with `rust::String::lossy(...)`: it is
+  `noexcept` (it crosses into Rust's `from_utf8_lossy`) so the message
+  survives where the throwing conversion left a bare `ok=false` with no text
+  after the guard caught it. The hex helpers are ASCII by construction and
+  keep the plain conversion.
+
 - Map to idiomatic Rust, not to the C++ shape. Handles wrap `UniquePtr<_>`; a
   session borrows its model (`StagedSession<'m>`), a model borrows its runtime.
 - `&self` for read-only calls, `Pin<&mut _>` for mutating ones. Do not make

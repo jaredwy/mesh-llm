@@ -137,31 +137,24 @@ Result guarded(Body &&body) noexcept {
 }
 
 // The staged and plan surface reports failure in-band - ok=false plus a
-// message - so guarded<Result> cannot shape it. Copying the message is
-// itself fallible: under bad_alloc the text is dropped and ok=false alone
-// reports the failure, the same contract run_pass keeps in backend.cpp.
+// message - so guarded<Result> cannot shape it. lossy never throws: it
+// crosses into Rust's from_utf8_lossy, so a message with arbitrary bytes
+// from a hostile file survives instead of vanishing into a dropped catch.
 template <typename Result>
 Result in_band_failed(const std::string &message) noexcept {
   Result result{};
   result.ok = false;
-  try {
-    result.error = rust::String(message);
-  } catch (...) {
-    // Out of memory copying the message: keep the flag, drop the text.
-  }
+  result.error = rust::String::lossy(message);
   return result;
 }
 
 // The plan surface returns a Vec whose entry carries the failure flag, so
-// even the vec allocation can fail while reporting a failure.
+// even the vec allocation can fail while reporting a failure. The message
+// copy cannot: lossy never throws (see in_band_failed).
 rust::Vec<StagePlanInfo> plan_stages_failed(const std::string &message) noexcept {
   StagePlanInfo info{};
   info.ok = false;
-  try {
-    info.error = rust::String(message);
-  } catch (...) {
-    // Out of memory copying the message: ok=false alone reports it.
-  }
+  info.error = rust::String::lossy(message);
   try {
     rust::Vec<StagePlanInfo> output;
     output.push_back(std::move(info));
@@ -305,7 +298,7 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
     const auto fail = [&output](const std::string &message) {
     StagePlanInfo info{};
     info.ok = false;
-    info.error = rust::String(message);
+    info.error = rust::String::lossy(message);
     output.push_back(std::move(info));
     return output;
     };
@@ -396,30 +389,30 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
       const std::string model_path(path);
       auto inventory = skippy::probe::cached_inventory(model_path);
       if (!inventory) {
-      result.error = rust::String(inventory.error());
+      result.error = rust::String::lossy(inventory.error());
       return result;
       }
       const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
       const auto ranges = split_layers(layers, stages);
       if (!ranges) {
-      result.error = rust::String(ranges.error());
+      result.error = rust::String::lossy(ranges.error());
       return result;
       }
       if (index >= ranges->size()) {
-      result.error = rust::String("stage index is out of range");
+      result.error = rust::String::lossy("stage index is out of range");
       return result;
       }
 
       auto lease =
       skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, *ranges);
       if (!lease) {
-      result.error = rust::String(lease.error().message);
+      result.error = rust::String::lossy(lease.error().message);
       return result;
       }
       const auto spec = skippy::llama::own(lease->configs[index]);
       auto model = skippy::llama::StagedModel::open(model_path, spec);
       if (!model) {
-      result.error = rust::String(model.error().message);
+      result.error = rust::String::lossy(model.error().message);
       return result;
       }
       result.ok = true;
@@ -440,7 +433,7 @@ StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noex
       result.ok = false;
       auto session = model.get().create_session();
       if (!session) {
-      result.error = rust::String(session.error().message);
+      result.error = rust::String::lossy(session.error().message);
       return result;
       }
       result.ok = true;
@@ -464,7 +457,7 @@ StagedEmbedResult Bridge::staged_embed(StagedSession& session, rust::Slice<const
       std::vector<llama_token> native(tokens.begin(), tokens.end());
       auto produced = session.get().embed(native, output);
       if (!produced) {
-      result.error = rust::String(produced.error().message);
+      result.error = rust::String::lossy(produced.error().message);
       return result;
       }
       result.ok = true;
@@ -500,25 +493,25 @@ ChainValidation Bridge::validate_chain(rust::Str path,
     const std::string model_path(path);
     auto inventory = skippy::probe::cached_inventory(model_path);
     if (!inventory) {
-    result.error = rust::String(inventory.error());
+    result.error = rust::String::lossy(inventory.error());
     return result;
     }
     const auto layers =
     static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
     const auto ranges = split_layers(layers, stage_count);
     if (!ranges) {
-    result.error = rust::String(ranges.error());
+    result.error = rust::String::lossy(ranges.error());
     return result;
     }
 
     auto plans =
     skippy::llama::plan_model_plans(impl_->runtime.backend(), model_path, *ranges);
     if (!plans) {
-    result.error = rust::String(plans.error().message);
+    result.error = rust::String::lossy(plans.error().message);
     return result;
     }
     if (const auto failure = skippy::validate_chain(*plans); failure.has_value()) {
-    result.error = rust::String("plan chain rejected: " +
+    result.error = rust::String::lossy("plan chain rejected: " +
     std::string(skippy::describe(*failure)));
     return result;
     }
@@ -773,7 +766,7 @@ ChainResult Bridge::open_chain(rust::Str path,
     result.chain = std::make_unique<StageChainHandle>();
 
     if (ranges.size() % 2 != 0) {
-      result.error = rust::String("ranges must be start/end pairs");
+      result.error = rust::String::lossy("ranges must be start/end pairs");
       return result;
     }
     std::vector<skippy::LayerRange> layers;
@@ -783,7 +776,7 @@ ChainResult Bridge::open_chain(rust::Str path,
     }
     auto chain = skippy::llama::StageChain::open(std::string(path), layers);
     if (!chain) {
-      result.error = rust::String(chain.error().message);
+      result.error = rust::String::lossy(chain.error().message);
       return result;
     }
     result.chain = std::make_unique<StageChainHandle>(std::move(*chain));
@@ -808,7 +801,7 @@ ChainRunResult Bridge::run_chain(StageChainHandle &chain,
     std::vector<llama_token> native(tokens.begin(), tokens.end());
     CopyingSink sink;
     if (auto failure = chain.get().prefill(native, sink); failure.has_value()) {
-      result.error = rust::String(failure->message);
+      result.error = rust::String::lossy(failure->message);
       return result;
     }
     result.has_frame = !sink.bytes.empty();
