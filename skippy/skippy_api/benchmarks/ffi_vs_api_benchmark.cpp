@@ -19,9 +19,13 @@
 #include "embed.h"
 #include "llama/backend.h"
 #include "llama/batch.h"
+#include "llama/model_inventory.h"
+#include "llama/stage_chain.h"
 #include "normalize.h"
 #include "rerank.h"
 #include "runtime.h"
+#include "stage_load.h"
+#include "stage_sink.h"
 #include "types.h"
 
 #include "llama.h"
@@ -953,6 +957,320 @@ template <bool UseFfi> void Rerank(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations());
 }
 
+// ---------------------------------------------------------------------------
+// stage_chain: hand-rolled C-ABI chaining versus the StageChain facade.
+//
+// Both sides run the same two-stage prefill over the same model. The FFI side
+// is what a C consumer must write: one model and session per range, and every
+// prefill hands the previous stage's frame in by hand. The API side is
+// StageChain::prefill with a sink. The measured delta is the driving, not the
+// planning: both sides' runtime configs come from the same plan lease, built
+// once before timing.
+// ---------------------------------------------------------------------------
+
+/// The raw C-ABI chain: owns one stage per range and the buffers each stage's
+/// export lands in, reused across prefill calls like the facade's
+/// PreparedExport.
+class ManualChain {
+public:
+    ManualChain() = default;
+    ~ManualChain() { release(); }
+    ManualChain(const ManualChain&) = delete;
+    ManualChain& operator=(const ManualChain&) = delete;
+
+    [[nodiscard]] bool open(const std::string& path, std::string& error) {
+        auto inventory = skippy::probe::read_inventory(path);
+        if (!inventory) {
+            error = "gguf: " + inventory.error();
+            return false;
+        }
+        const auto layers = skippy::probe::layer_count_from(*inventory);
+        const std::int32_t half = layers / 2;
+        if (half < 1) {
+            error = "model has fewer than two layers to split";
+            return false;
+        }
+        ranges_ = {skippy::LayerRange{0, half}, skippy::LayerRange{half, layers}};
+
+        skippy::llama::LlamaBackend backend;
+        auto lease = backend.plan_model_stages(path, ranges_);
+        if (!lease) {
+            error = "plan: " + lease.error().message;
+            return false;
+        }
+        if (lease->configs.size() != ranges_.size()) {
+            error = "planner returned " + std::to_string(lease->configs.size()) + " configs for " +
+                    std::to_string(ranges_.size()) + " ranges";
+            return false;
+        }
+        lease_ = std::move(*lease);
+        stages_.resize(ranges_.size());
+        for (std::size_t index = 0; index < ranges_.size(); ++index) {
+            if (!open_stage(path, lease_.configs[index], stages_[index], error)) return false;
+        }
+        return true;
+    }
+
+    /// One prefill through every stage, carrying the frames by hand. The
+    /// buffers were sized at warmup, so a BUFFER_TOO_SMALL here is a setup
+    /// miss, not a state to retry in the timed loop.
+    [[nodiscard]] bool prefill(std::span<const llama_token> tokens, std::string& error) {
+        const skippy_activation_desc* input_desc = nullptr;
+        const std::uint8_t* input = nullptr;
+        for (Stage& stage : stages_) {
+            std::size_t needed = 0;
+            skippy_error* failure = nullptr;
+            const auto status = skippy_prefill_chunk_frame(
+                stage.session, tokens.data(), tokens.size(), input_desc, input, &stage.out_desc,
+                stage.out.data(), stage.out.size(), &needed, &failure);
+            if (status != SKIPPY_STATUS_OK) {
+                error = describe(status, failure);
+                return false;
+            }
+            input_desc = &stage.out_desc;
+            input = stage.out.data();
+        }
+        return true;
+    }
+
+    /// The terminal stage's frame, for the agreement check against the facade.
+    [[nodiscard]] std::span<const std::uint8_t> terminal() const {
+        return stages_.empty() ? std::span<const std::uint8_t>{} : stages_.back().out;
+    }
+
+    /// The first stage's model, for callers that need a tokenizer.
+    [[nodiscard]] skippy_model* first_model() const { return stages_.front().model; }
+
+    /// The ranges this chain covers.
+    [[nodiscard]] std::span<const skippy::LayerRange> ranges() const { return ranges_; }
+
+    /// Clears every stage's session so the timed loop re-prefills from
+    /// position zero instead of overflowing the context window.
+    [[nodiscard]] bool reset(std::string& error) {
+        for (Stage& stage : stages_) {
+            skippy_error* failure = nullptr;
+            if (skippy_session_reset(stage.session, &failure) != SKIPPY_STATUS_OK) {
+                error = describe(SKIPPY_STATUS_ERROR, failure);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Sizes every stage's export buffer with one warmup prefill, so the
+    /// timed loop never reallocates.
+    [[nodiscard]] bool warm(std::span<const llama_token> tokens, std::string& error) {
+        const skippy_activation_desc* input_desc = nullptr;
+        const std::uint8_t* input = nullptr;
+        for (Stage& stage : stages_) {
+            std::size_t needed = stage.out.size();
+            for (int attempt = 0; attempt < 3; ++attempt) {
+                if (stage.out.size() < needed) stage.out.resize(needed);
+                needed = 0;
+                skippy_error* failure = nullptr;
+                const auto status = skippy_prefill_chunk_frame(
+                    stage.session, tokens.data(), tokens.size(), input_desc, input, &stage.out_desc,
+                    stage.out.data(), stage.out.size(), &needed, &failure);
+                if (status == SKIPPY_STATUS_OK) {
+                    stage.out.resize(needed);
+                    break;
+                }
+                if (status != SKIPPY_STATUS_BUFFER_TOO_SMALL || needed == 0) {
+                    error = describe(status, failure);
+                    return false;
+                }
+                if (failure != nullptr) skippy_error_free(failure);
+            }
+            input_desc = &stage.out_desc;
+            input = stage.out.data();
+        }
+        return true;
+    }
+
+private:
+    struct Stage {
+        skippy_model* model = nullptr;
+        skippy_session* session = nullptr;
+        skippy_activation_desc out_desc{};
+        std::vector<std::uint8_t> out;
+    };
+
+    void release() {
+        for (Stage& stage : stages_) {
+            if (stage.session != nullptr) skippy_session_free(stage.session, nullptr);
+            if (stage.model != nullptr) skippy_model_free(stage.model, nullptr);
+        }
+        stages_.clear();
+    }
+
+    [[nodiscard]] static bool open_stage(const std::string& path,
+                                         const skippy::StageLoadConfig& config, Stage& stage,
+                                         std::string& error) {
+        stage.out.resize(1U << 20);
+        // The config's views run into the plan's flat identity arena, which
+        // does not terminate individual strings: copy to owning storage
+        // before handing the loader `const char*`s.
+        const auto owned = [](std::span<const std::string_view> values) {
+            std::vector<std::string> copy;
+            copy.reserve(values.size());
+            for (const std::string_view value : values)
+                copy.emplace_back(value);
+            return copy;
+        };
+        const std::vector<std::string> residents = owned(config.resident_identities);
+        const std::vector<std::string> imports = owned(config.activation_import_identities);
+        const std::vector<std::string> import_bindings = owned(config.activation_import_bindings);
+        const std::vector<std::string> exports = owned(config.activation_export_identities);
+        const std::vector<std::string> export_bindings = owned(config.activation_export_bindings);
+        std::vector<const char*> resident_names;
+        resident_names.reserve(residents.size());
+        for (const std::string& name : residents)
+            resident_names.push_back(name.c_str());
+        std::vector<const char*> import_names;
+        for (const std::string& name : imports)
+            import_names.push_back(name.c_str());
+        std::vector<const char*> import_binding_names;
+        for (const std::string& name : import_bindings)
+            import_binding_names.push_back(name.c_str());
+        std::vector<const char*> export_names;
+        for (const std::string& name : exports)
+            export_names.push_back(name.c_str());
+        std::vector<const char*> export_binding_names;
+        for (const std::string& name : export_bindings)
+            export_binding_names.push_back(name.c_str());
+        const std::string contract{config.execution_contract};
+
+        auto runtime = skippy_runtime_config_default();
+        runtime.stage_index = config.stage_index;
+        runtime.layer_start = config.layers.start;
+        runtime.layer_end = config.layers.end;
+        runtime.ctx_size = 512;
+        runtime.n_batch = 512;
+        runtime.n_ubatch = 512;
+        runtime.n_gpu_layers = 999;
+        runtime.load_mode = SKIPPY_LOAD_MODE_LAYER_PACKAGE;
+        runtime.execution_contract = contract.c_str();
+        runtime.resident_tensor_names = resident_names.data();
+        runtime.resident_tensor_name_count = resident_names.size();
+        runtime.activation_import_identities = import_names.empty() ? nullptr : import_names.data();
+        runtime.activation_import_identity_count = import_names.size();
+        runtime.activation_import_bindings =
+            import_binding_names.empty() ? nullptr : import_binding_names.data();
+        runtime.activation_export_identities = export_names.empty() ? nullptr : export_names.data();
+        runtime.activation_export_identity_count = export_names.size();
+        runtime.activation_export_bindings =
+            export_binding_names.empty() ? nullptr : export_binding_names.data();
+
+        skippy_error* failure = nullptr;
+        if (skippy_model_open(path.c_str(), &runtime, &stage.model, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        if (skippy_session_create(stage.model, &stage.session, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<skippy::LayerRange> ranges_;
+    skippy::llama::PlanLease lease_;
+    std::vector<Stage> stages_;
+};
+
+/// The whole stage_chain A/B: setup, agreement check, timed loop.
+void stage_chain_body(benchmark::State& state, bool use_ffi) {
+    const char* variable = std::getenv("SKIPPY_BENCH_MODEL");
+    if (variable == nullptr || *variable == '\0') {
+        state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
+        return;
+    }
+    const std::string path{variable};
+
+    // Both sides share the tokens: tokenize once through the manual chain's
+    // first stage, exactly as a C consumer would.
+    ManualChain manual;
+    std::string error;
+    if (!manual.open(path, error)) {
+        state.SkipWithError(error.c_str());
+        return;
+    }
+    std::vector<llama_token> tokens(512);
+    {
+        const std::string text = Harness::text(512);
+        std::size_t count = 0;
+        skippy_error* failure = nullptr;
+        auto status = skippy_tokenize(manual.first_model(), text.c_str(), true, tokens.data(),
+                                      tokens.size(), &count, &failure);
+        if (status == SKIPPY_STATUS_BUFFER_TOO_SMALL) {
+            if (failure != nullptr) skippy_error_free(failure);
+            tokens.resize(count);
+            failure = nullptr;
+            status = skippy_tokenize(manual.first_model(), text.c_str(), true, tokens.data(),
+                                     tokens.size(), &count, &failure);
+        }
+        if (status != SKIPPY_STATUS_OK) {
+            state.SkipWithError(describe(status, failure).c_str());
+            return;
+        }
+        tokens.resize(count);
+    }
+
+    auto chain = skippy::llama::StageChain::open(path, manual.ranges());
+    if (!chain) {
+        state.SkipWithError(("chain open: " + chain.error().message).c_str());
+        return;
+    }
+
+    // Warm both, then refuse to time a pair that disagrees: the frame is the
+    // correctness contract, so a silent mismatch would make the ratio lie.
+    if (!manual.warm(tokens, error)) {
+        state.SkipWithError(error.c_str());
+        return;
+    }
+    skippy::CopyFrameSink sink;
+    if (auto failure = chain->prefill(tokens, sink); failure.has_value()) {
+        state.SkipWithError(failure->message.c_str());
+        return;
+    }
+    const std::span<const std::uint8_t> manual_frame = manual.terminal();
+    if (sink.frame.has_value() &&
+        (sink.frame->size() != manual_frame.size() ||
+         std::memcmp(sink.frame->data(), manual_frame.data(), manual_frame.size()) != 0)) {
+        state.SkipWithError("chain sides disagree on the terminal frame");
+        return;
+    }
+
+    if (use_ffi) {
+        for (auto _ : state) {
+            if (!manual.reset(error)) {
+                state.SkipWithError(error.c_str());
+                return;
+            }
+            if (!manual.prefill(tokens, error)) {
+                state.SkipWithError(error.c_str());
+                return;
+            }
+        }
+    } else {
+        skippy::DiscardSink discard;
+        for (auto _ : state) {
+            if (auto failure = chain->reset(); failure.has_value()) {
+                state.SkipWithError(failure->message.c_str());
+                return;
+            }
+            if (auto failure = chain->prefill(tokens, discard); failure.has_value()) {
+                state.SkipWithError(failure->message.c_str());
+                return;
+            }
+        }
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
+void stage_chain_ffi(benchmark::State& state) { stage_chain_body(state, true); }
+void stage_chain_api(benchmark::State& state) { stage_chain_body(state, false); }
+
 void token_args(benchmark::internal::Benchmark* benchmark) {
     benchmark->Arg(1)->Arg(2)->Arg(8)->Arg(32)->Arg(128)->Arg(512)->UseRealTime();
 }
@@ -1024,6 +1342,9 @@ BENCHMARK_TEMPLATE(ModelLoad, false)
 
 BENCHMARK_TEMPLATE(Rerank, true)->Name("Rerank/FFI")->UseRealTime();
 BENCHMARK_TEMPLATE(Rerank, false)->Name("Rerank/API")->UseRealTime();
+
+BENCHMARK(stage_chain_ffi)->Name("stage_chain/FFI")->UseRealTime();
+BENCHMARK(stage_chain_api)->Name("stage_chain/API")->UseRealTime();
 
 // Our own main so a missing model is one line on stderr, and the llama-free
 // benchmarks still run: BatchBuild and Normalize need no GGUF.

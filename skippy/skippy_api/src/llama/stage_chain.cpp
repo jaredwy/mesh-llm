@@ -67,4 +67,20 @@ std::optional<StagedFailure> StageChain::run_stage(std::size_t index,
     return StagedFailure{.status = 0, .message = "activation frame sizing did not converge"};
 }
 
+std::optional<StagedFailure> StageChain::reset() {
+    for (Stage& stage : stages_) {
+        skippy_error* error = nullptr;
+        const auto status = skippy_session_reset(stage.session.native(), &error);
+        if (status != SKIPPY_STATUS_OK) {
+            StagedFailure failure{.status = static_cast<int>(status), .message = {}};
+            if (error != nullptr) {
+                if (error->message != nullptr) failure.message = error->message;
+                skippy_error_free(error);
+            }
+            return failure;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace skippy::llama

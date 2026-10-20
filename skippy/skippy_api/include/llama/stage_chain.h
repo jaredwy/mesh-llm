@@ -49,6 +49,11 @@ public:
 
     [[nodiscard]] std::size_t stage_count() const noexcept { return stages_.size(); }
 
+    /// Clears every stage's session state so the chain can be re-prefilled.
+    /// The reset is not free, so streaming callers keep feeding the chain
+    /// instead of resetting between continuation steps.
+    [[nodiscard]] std::optional<StagedFailure> reset();
+
 private:
     struct Stage {
         StagedModel model;
