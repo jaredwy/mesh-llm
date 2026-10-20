@@ -9,6 +9,8 @@
 //! Model files come from `SKIPPY_TEST_MODEL` (embedder) and
 //! `SKIPPY_TEST_RERANKER` (reranker). A test whose model is absent returns
 //! early, so `cargo test` stays green on a machine without GGUFs.
+//! `SKIPPY_TEST_CAUSAL` (any small chat GGUF) covers the decoder-only
+//! classification default.
 //!
 //! `integration.rs` keeps the broad smoke coverage; this file targets the
 //! behaviours that only a real model can confirm.
@@ -29,6 +31,18 @@ fn model_path(variable: &str) -> Option<String> {
         eprintln!("{variable} unset; skipping");
     }
     path
+}
+
+/// Optional model coverage: skips even under `SKIPPY_TEST_REQUIRE_MODELS`,
+/// which only mandates the embedder and the reranker.
+fn optional_model_path(variable: &str) -> Option<String> {
+    match std::env::var(variable) {
+        Ok(path) if !path.is_empty() => Some(path),
+        _ => {
+            eprintln!("{variable} unset; skipping");
+            None
+        }
+    }
 }
 
 /// Loads the embedder, or returns `None` when the test model is not configured.
@@ -181,6 +195,28 @@ fn reranker_is_classified_as_rank_pooled_with_one_classifier_output() {
     // A classifier head is not an embedding width.
     assert_eq!(info.embedding_pooling, None);
     assert_eq!(info.output_dimensions, 0);
+}
+
+#[test]
+fn a_causal_decoder_is_not_a_reranker() {
+    // llama_model_n_cls_out defaults to 1, so its raw value is not a presence
+    // test: ungated, every decoder-only chat GGUF reads as a one-output
+    // classifier and lands in the rerank table with a score head that does
+    // not exist. The count is encoder-gated at load time.
+    let Some(path) = optional_model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+    let model = runtime.load_model(&path).unwrap();
+    let mut session = model.create_session(SessionConfig::default()).unwrap();
+
+    let info = *session.workload();
+    assert_eq!(info.kind, WorkloadKind::CausalGeneration);
+    assert_eq!(info.classifier_outputs, 0);
+    assert_eq!(info.embedding_pooling, None);
+
+    // Neither lane is served: the refusals are the contract, not a crash.
+    let input = [Token(1), Token(2), Token(3)];
+    assert!(matches!(session.embed(&input), Err(WorkloadError::UnsupportedWorkload)));
+    assert!(matches!(session.rerank("query", "document"), Err(WorkloadError::UnsupportedWorkload)));
 }
 
 // ---------------------------------------------------------------------------

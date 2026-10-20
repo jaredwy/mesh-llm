@@ -359,15 +359,17 @@ skippy-api-checkpoint message="" embed_model="" reranker_model="":
     git --no-pager log -1 --oneline
 
 # End-to-end Rust tests: real GGUF through llama.cpp, no mocks.
-# skippy-api-rs-e2e <embed-model.gguf> <reranker-model.gguf> [cargo test args]
+# skippy-api-rs-e2e <embed-model.gguf> <reranker-model.gguf> [causal-model.gguf] [cargo test args]
 [unix]
 [positional-arguments]
-skippy-api-rs-e2e embed_model="" reranker_model="" *ARGS="":
+skippy-api-rs-e2e embed_model="" reranker_model="" causal_model="" *ARGS="":
     #!/usr/bin/env bash
     set -euo pipefail
     embed="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     reranker="${1:-}"
+    if [[ $# -gt 0 ]]; then shift; fi
+    causal="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     while [[ $# -gt 0 && -z "$1" ]]; do shift; done
     if [[ -d /opt/homebrew/opt/lld/bin ]]; then
@@ -379,11 +381,17 @@ skippy-api-rs-e2e embed_model="" reranker_model="" *ARGS="":
     if [[ -n "$embed" && -n "$reranker" ]]; then
       export SKIPPY_TEST_REQUIRE_MODELS=1
     fi
+    # The causal model is optional coverage; exporting it empty would trip the
+    # require-models check above, so it is only set when supplied.
+    if [[ -n "$causal" ]]; then
+      export SKIPPY_TEST_CAUSAL="$causal"
+    fi
     # The workspace config points rustc at sccache; these tests link the native
     # library through the crate's own build script, so run rustc directly.
     RUSTC_WRAPPER= \
     SKIPPY_TEST_MODEL="$embed" \
     SKIPPY_TEST_RERANKER="$reranker" \
+    SKIPPY_TEST_CAUSAL="$causal" \
       cargo test "$@"
 
 # Run one A/B case from the patch manifest (list cases with no argument).

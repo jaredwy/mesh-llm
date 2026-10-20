@@ -326,6 +326,19 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
 
 ## Traps that have already bitten us
 
+- **A native getter with a non-zero default is not a presence test.**
+  `llama_model_n_cls_out` defaults to 1 and is only overwritten when
+  `classifier.output_labels` ships, so reading it ungated called every
+  decoder-only chat GGUF a one-output reranker — with a "score" read from a
+  head that does not exist. Neither llama flag separates the cases
+  (`llama_model_has_encoder` is true only for T5-family pairs,
+  `llama_model_has_decoder` for all but T5ENCODER), and the label test the
+  upstream API suggests fails the fixture: `bge-reranker-v2-m3` ships no
+  labels, and its default count of 1 *is* its real score head. Gate the count
+  on the architecture family (`family.cpp`): decoder families never carry
+  this library's classifier head, bert-family models do, unknown
+  architectures keep the conservative default. Pinned by
+  `end_to_end.rs::a_causal_decoder_is_not_a_reranker`.
 - **A throwing `std` call inside `noexcept` is `std::terminate` on the worst
   day, and nothing tests it.** The four `StagePlan` value accessors resolved a
   profile's recorded `{offset, count}` with `std::span::subspan`. A corrupt

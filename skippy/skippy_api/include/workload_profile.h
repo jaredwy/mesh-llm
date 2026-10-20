@@ -35,6 +35,10 @@ enum class DeclaredPooling : std::uint8_t {
 struct ModelFacts {
     bool has_encoder = false;
     bool has_decoder = false;
+    /// Encoder-side classifier outputs. 0 for decoder-family models:
+    /// the native n_cls_out getter defaults to 1, so it is not a presence
+    /// test and load_model gates it on the architecture family before
+    /// feeding the table.
     std::uint32_t classifier_outputs = 0;
     DeclaredPooling declared_pooling = DeclaredPooling::Unspecified;
 };

@@ -1,4 +1,5 @@
 #include "llama/backend.h"
+#include "family.h"
 #include "workload_profile.h"
 
 #include "llama/stage_planner.h"
@@ -445,7 +446,29 @@ LlamaBackend::load_model(const ModelConfig& config) {
 
     const llama_vocab& vocab = *llama_model_get_vocab(model.get());
     const enum llama_pooling_type declared_pooling = model_pooling_type(*model);
-    const std::uint32_t classifier_outputs = llama_model_n_cls_out(model.get());
+    // llama_model_n_cls_out defaults to 1, so its raw value is not a presence
+    // test: ungated, every decoder-only chat GGUF reads as a one-output
+    // classifier and the workload table calls it a reranker. Neither llama
+    // flag separates the cases (`llama_model_has_encoder` is true only for
+    // T5-family pairs in this tree, `has_decoder` for all but T5ENCODER) and
+    // the label test the upstream API suggests fails the fixture: the
+    // reranker itself ships no `classifier.output_labels`. The family table
+    // is the discriminator — decoder families never carry this library's
+    // classifier head, bert-family models do, and unknown architectures keep
+    // today's conservative default rather than silently dropping a head.
+    constexpr std::size_t kArchitectureWidth = 64;
+    std::array<char, kArchitectureWidth> architecture{};
+    const std::int32_t architecture_found = llama_model_meta_val_str(
+        model.get(), "general.architecture", architecture.data(), architecture.size());
+    const ModelFamily family =
+        architecture_found >= 0
+            ? family_of(std::string_view{architecture.data(),
+                                         static_cast<std::size_t>(architecture_found)})
+            : ModelFamily::Unknown;
+    const bool may_carry_classifier_head =
+        family == ModelFamily::Bert || family == ModelFamily::Unknown;
+    const std::uint32_t classifier_outputs =
+        may_carry_classifier_head ? llama_model_n_cls_out(model.get()) : 0;
     // Patch 0011's table, evaluated once: the facts are load-time properties.
     const WorkloadProfile profile = classify(ModelFacts{
         .has_encoder = llama_model_has_encoder(model.get()),
