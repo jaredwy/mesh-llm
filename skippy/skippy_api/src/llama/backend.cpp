@@ -1,5 +1,7 @@
 #include "llama/backend.h"
+
 #include "family.h"
+#include "llama/model_inventory.h"
 #include "workload_profile.h"
 
 #include "llama/stage_planner.h"
@@ -138,12 +140,27 @@ LlamaModel::LlamaModel(llama_model_ptr model, Traits traits) noexcept
           static_cast<std::size_t>(std::max(llama_model_n_embd_out(model_.get()), 0))),
       traits_(std::move(traits)) {}
 
+/// The geometry a pooled context can actually serve, per sequence. llama pads
+/// n_ctx to 256 (llama-context.cpp:377) but leaves n_batch/n_ubatch at the
+/// requested size, and llama_decode GGML_ASSERTs on a batch larger than either
+/// (llama-context.cpp:1612) - an abort, not an error. A pool label is
+/// therefore only correct if it comes from this one function: min of the
+/// three capacities, divided by the sequences llama built the context for.
+/// Any other spelling of "capacity" reintroduces P0-A.
+std::pair<std::uint32_t, std::uint32_t> pooled_geometry(const llama_context& context) noexcept {
+    const std::uint32_t sequences = std::max(1U, llama_n_seq_max(&context));
+    const std::uint32_t tokens =
+        std::min({llama_n_ctx(&context), llama_n_batch(&context), llama_n_ubatch(&context)}) /
+        sequences;
+    return {tokens, sequences};
+}
+
 LlamaSession::LlamaSession(llama_context_ptr context, LlamaModel& model, const llama_vocab& vocab,
                            WorkloadInfo workload, std::optional<Token> decoder_start,
                            std::uint32_t max_tokens, std::uint32_t sequences) noexcept
     : context_(std::move(context)), model_(model), vocab_(vocab), workload_(workload),
       rerank_prompt_(model.traits().rerank_prompt ? &*model.traits().rerank_prompt : nullptr),
-      decoder_start_(decoder_start), batch_limit_(llama_n_batch(context_.get())),
+      decoder_start_(decoder_start), batch_limit_(llama_n_ubatch(context_.get())),
       max_tokens_(max_tokens), sequences_(sequences) {
     // Pre-size the tokenize scratch to the session's whole budget: the first
     // tokenize on a fresh session then runs in one native call, and
@@ -166,8 +183,7 @@ LlamaSession::~LlamaSession() {
     // context relabelled with this session's smaller geometry hides capacity
     // the pool could otherwise serve.
     llama_synchronize(context_.get());
-    const std::uint32_t sequences = std::max(1U, llama_n_seq_max(context_.get()));
-    const std::uint32_t capacity = llama_n_ctx(context_.get()) / sequences;
+    const auto [capacity, sequences] = pooled_geometry(*context_.get());
     model_.recycle(std::move(context_), capacity, sequences);
 }
 
@@ -237,7 +253,9 @@ LlamaSession::process_sequences(std::span<const std::span<const Token>> inputs) 
         // The per-sequence budget too: the total check below cannot see a
         // 1500-token row in a {512, 4} session, which the single-sequence
         // path would reject for the same input.
-        if (input.size() > max_tokens_) return std::unexpected(WorkloadError::TooManyTokens);
+        if (input.size() > max_tokens_ || input.size() > batch_limit_) {
+            return std::unexpected(WorkloadError::TooManyTokens);
+        }
         total += input.size();
         if (total > static_cast<std::size_t>(max_tokens_) * sequences_) {
             return std::unexpected(WorkloadError::TooManyTokens);
@@ -338,7 +356,11 @@ std::expected<void, WorkloadError> LlamaSession::process_tokens(std::span<const 
     // The *configured* geometry bounds a session, not the capacity of the
     // context it happens to be served by: a warmed larger context is reused for
     // smaller requests, and the contract must not silently widen with it.
-    if (tokens.size() > detail::max_batch_tokens || tokens.size() > max_tokens_) {
+    // max_tokens_ is the configured contract; batch_limit_ is what the pooled
+    // context llama actually built will accept before its GGML_ASSERT aborts
+    // the process. Both must pass, or a mislabelled pool slot becomes a crash.
+    if (tokens.size() > detail::max_batch_tokens || tokens.size() > max_tokens_ ||
+        tokens.size() > batch_limit_) {
         return std::unexpected(WorkloadError::TooManyTokens);
     }
     const auto count = static_cast<std::int32_t>(tokens.size());
@@ -479,29 +501,19 @@ LlamaBackend::load_model(const ModelConfig& config) {
 
     const llama_vocab& vocab = *llama_model_get_vocab(model.get());
     const enum llama_pooling_type declared_pooling = model_pooling_type(*model);
-    // llama_model_n_cls_out defaults to 1, so its raw value is not a presence
-    // test: ungated, every decoder-only chat GGUF reads as a one-output
-    // classifier and the workload table calls it a reranker. Neither llama
-    // flag separates the cases (`llama_model_has_encoder` is true only for
-    // T5-family pairs in this tree, `has_decoder` for all but T5ENCODER) and
-    // the label test the upstream API suggests fails the fixture: the
-    // reranker itself ships no `classifier.output_labels`. The family table
-    // is the discriminator — decoder families never carry this library's
-    // classifier head, bert-family models do, and unknown architectures keep
-    // today's conservative default rather than silently dropping a head.
-    constexpr std::size_t kArchitectureWidth = 64;
-    std::array<char, kArchitectureWidth> architecture{};
-    const std::int32_t architecture_found = llama_model_meta_val_str(
-        model.get(), "general.architecture", architecture.data(), architecture.size());
-    const ModelFamily family =
-        architecture_found >= 0
-            ? family_of(std::string_view{architecture.data(),
-                                         static_cast<std::size_t>(architecture_found)})
-            : ModelFamily::Unknown;
-    const bool may_carry_classifier_head =
-        family == ModelFamily::Bert || family == ModelFamily::Unknown;
+    // The classifier head is a tensor, not a family trait: cls.output is
+    // loaded by bert-family AND qwen3/qwen3vl/qwen35/lfm2 (llama-arch.cpp:536,
+    // llama-model.cpp load tables), while ~225 of ~240 architectures are
+    // Unknown to family.cpp. Testing the tensor table is
+    // architecture-independent and cannot misclassify in either direction;
+    // n_cls_out defaults to 1 whether or not the tensor exists, so it is
+    // read only as the width of a head proven present.
+    const auto inventory = probe::cached_inventory(config.path);
+    const bool has_classifier_head =
+        inventory && std::ranges::binary_search(*inventory, std::string_view{"cls.output.weight"},
+                                                {}, &probe::TensorInfo::name);
     const std::uint32_t classifier_outputs =
-        may_carry_classifier_head ? llama_model_n_cls_out(model.get()) : 0;
+        has_classifier_head ? llama_model_n_cls_out(model.get()) : 0;
     // Patch 0011's table, evaluated once: the facts are load-time properties.
     const WorkloadProfile profile = classify(ModelFacts{
         .has_encoder = llama_model_has_encoder(model.get()),
@@ -540,8 +552,7 @@ LlamaBackend::load_model(const ModelConfig& config) {
             // Label the warm context with the capacity llama built, not the
             // request that triggered it, so the pool can serve every geometry
             // the context actually fits.
-            const std::uint32_t sequences = std::max(1U, llama_n_seq_max(context.get()));
-            const std::uint32_t capacity = llama_n_ctx(context.get()) / sequences;
+            const auto [capacity, sequences] = pooled_geometry(*context.get());
             loaded->recycle(std::move(context), capacity, sequences);
         }
         return loaded;
