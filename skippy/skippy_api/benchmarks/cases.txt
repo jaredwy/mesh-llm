@@ -21,7 +21,7 @@
 2	A	stage_realize	^stage_realize	parity	
 1	A	stage_materialize	^stage_materialize	win	measured 1.242x/1.208x new-faster on 6f9658b8 (MiniLM, 5 interleaved reps each); the recorded 0.80x loss predated the stored-positions and shared-mapping work
 8	A	stage_validate	^stage_validate	win	
-2	B	stage_chain	^stage_chain	pending	native reference fixture not written yet
+2	B	stage_chain	^stage_chain	parity	hand-rolled C-ABI chaining (one model+session per range, frames carried by hand) vs StageChain::prefill with a sink; measured 0.991x on b7ff6316 (qwen2.5-0.5b-instruct Q4_K_M, 24 layers as two 12-layer stages, 109-token prefill with a session reset per iteration, 5 interleaved reps; both sides verify their terminal frames agree before timing); correctness companion is the pipeline probe's 16-step greedy continuation (default prompt "the quick brown fox jumps over the lazy dog"), which matches the unstaged reference on the same fixture
 9	B	stage_boundary	^stage_boundary	blocked-upstream	needs a prepared-export token entry point: new ABI + per-family work in the patch queue
 3	B	stage_open_encoder	^stage_open	blocked-upstream	BERT stage install fails: attention.mask.0 has no owned request recipe (native)
 11	C	workload_classify	^ModelLoad/.*	parity	load-time derivation only; the ModelLoad row covers it (same native open), decisions tested in workload_profile_test

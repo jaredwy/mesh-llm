@@ -472,6 +472,14 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   methods taking `Pin<&mut T>`, and declare `type T;` in the bridge block.
 - **The formatter reflows lambdas.** A `str.replace()` over formatted C++ can
   silently no-op; grep after editing, not after compiling.
+- **Identity `string_view`s run into a flat arena and are not
+  NUL-terminated.** `StageLoadConfig`'s views (and any plan identity) point
+  into the plan's `identity_arena`, where neighbours sit back to back.
+  Handing `name.data()` to an API that wants `const char*` concatenates the
+  rest of the arena into one garbage tensor name and the loader rejects it
+  with a several-hundred-character "resident tensor". Copy to owning
+  `std::string`s first — `staged.cpp`'s `own()` is the pattern — then take
+  `.c_str()`.
 - **`ffi_vs_api_benchmark.cpp` warnings are errors.** A `nodiscard` result must
   be `(void)`-cast, and the benchmark will fail to compile (not run) if missed.
 
