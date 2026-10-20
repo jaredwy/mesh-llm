@@ -269,20 +269,6 @@ void StagePlan::append(OwnedProfile profile) {
     });
 }
 
-namespace {
-std::vector<OwnedValue> owned_values(const StagePlan& plan, std::span<const FrontierValue> values) {
-    std::vector<OwnedValue> owned;
-    owned.reserve(values.size());
-    for (const FrontierValue& value : values) {
-        owned.push_back(OwnedValue{
-            .identity = ValueIdentity{std::string{plan.view(value.identity.slice)}},
-            .binding = ValueBinding{std::string{plan.view(value.binding.slice)}},
-        });
-    }
-    return owned;
-}
-} // namespace
-
 StagePlan StagePlan::clone() const {
     StagePlan copy;
     copy.package = package;
@@ -290,49 +276,18 @@ StagePlan StagePlan::clone() const {
     copy.layer_count = layer_count;
     copy.range = range;
     copy.execution_contract = execution_contract;
-    // The arena is copied wholesale, so every slice offset in the copied
-    // profiles and residents still points at the same bytes — no replay needed.
+    // Profiles record {offset, count} positions into the flat vectors, and
+    // every vector is copied wholesale above, so the memberwise profile copy
+    // is already a correct deep copy: the positions resolve against the
+    // copy's own storage. Appending the values again (the span-era replay)
+    // would duplicate every flat vector and the arena.
     copy.identity_arena = identity_arena;
     copy.activation_imports = activation_imports;
     copy.activation_exports = activation_exports;
     copy.request_inputs = request_inputs;
     copy.state_effects = state_effects;
     copy.resident_identities = resident_identities; // slices; arena copied above
-    // Re-derive each profile's spans against the copy's own (now separate)
-    // storage by replaying the same offsets.
-    std::size_t imports = 0;
-    std::size_t exports = 0;
-    std::size_t requests = 0;
-    std::size_t effects = 0;
-    copy.profiles.reserve(profiles.size());
-    for (const PlanProfile& profile : profiles) {
-        copy.append(OwnedProfile{
-            .id = profile.id,
-            .graph_identity = profile.graph_identity,
-            .profile_identity = profile.profile_identity,
-            .slice_identity = profile.slice_identity,
-            .source_snapshot = profile.source_snapshot,
-            .graph_configuration = profile.graph_configuration,
-            .backend = profile.backend,
-            .slice_range = profile.slice_range,
-            .tokens = profile.tokens,
-            .sequences = profile.sequences,
-            .outputs = profile.outputs,
-            .recurrent_rollback_sequences = profile.recurrent_rollback_sequences,
-            .activation_imports = owned_values(*this, activation_imports_of(profile)),
-            .activation_exports = owned_values(*this, activation_exports_of(profile)),
-            .request_inputs = owned_values(*this, request_inputs_of(profile)),
-            .state_effects = {state_effects_of(profile).begin(), state_effects_of(profile).end()},
-        });
-        imports += profile.activation_imports.count;
-        exports += profile.activation_exports.count;
-        requests += profile.request_inputs.count;
-        effects += profile.state_effects.count;
-    }
-    (void)imports;
-    (void)exports;
-    (void)requests;
-    (void)effects;
+    copy.profiles = profiles;                       // positions; vectors copied above
     return copy;
 }
 } // namespace skippy

@@ -389,4 +389,29 @@ TEST(StagePlan, CorruptValuePositionsReadShortInsteadOfThrowing) {
     EXPECT_TRUE(value.state_effects_of(corrupt).empty());
 }
 
+TEST(StagePlan, CloneIsAMemberwiseDeepCopyNotAReplay) {
+    // Profiles record {offset, count} positions into the flat vectors, so a
+    // memberwise copy is already a correct deep copy. The span-era clone()
+    // appended every value again after copying the vectors wholesale, leaving
+    // 2x the storage and a dead first half.
+    const StagePlan original =
+        plan({0, 6}, 6,
+             {profile({0, 6}, {ValueIdentity{"first.a"}, ValueIdentity{"first.b"}},
+                      {ValueIdentity{"first.out"}}),
+              profile({0, 6}, {ValueIdentity{"second.a"}}, {})});
+    const StagePlan copy = original.clone();
+
+    EXPECT_EQ(copy.activation_imports.size(), original.activation_imports.size());
+    EXPECT_EQ(copy.activation_exports.size(), original.activation_exports.size());
+    EXPECT_EQ(copy.identity_arena.size(), original.identity_arena.size());
+    ASSERT_EQ(copy.profiles.size(), original.profiles.size());
+    const auto first_imports = copy.activation_imports_of(copy.profiles.front());
+    ASSERT_EQ(first_imports.size(), 2U);
+    EXPECT_EQ(copy.view(first_imports.front().identity.slice), "first.a");
+    EXPECT_EQ(copy.view(first_imports.back().identity.slice), "first.b");
+    // The copy resolved against its own storage; the original is untouched.
+    const auto original_imports = original.activation_imports_of(original.profiles.front());
+    EXPECT_EQ(original.view(original_imports.front().identity.slice), "first.a");
+}
+
 } // namespace
