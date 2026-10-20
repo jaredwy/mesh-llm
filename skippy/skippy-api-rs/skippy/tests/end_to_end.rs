@@ -10,7 +10,7 @@
 //! `SKIPPY_TEST_RERANKER` (reranker). A test whose model is absent returns
 //! early, so `cargo test` stays green on a machine without GGUFs.
 //! `SKIPPY_TEST_CAUSAL` (any small chat GGUF) covers the decoder-only
-//! classification default.
+//! classification default and the stage-chain tests.
 //!
 //! `integration.rs` keeps the broad smoke coverage; this file targets the
 //! behaviours that only a real model can confirm.
@@ -71,14 +71,25 @@ fn a_chain_runs_every_stage_and_hands_back_a_terminal_frame() {
     }
     let path = path.expect("model path");
     let runtime = Runtime::new().expect("runtime");
-    let ranges = [(0_i32, 12_i32), (12, 24)];
+    // Ranges come from the planner: hard-coded splits outrun the fixture's
+    // layer count (MiniLM has six) and get rejected before any stage program
+    // is attempted, which says nothing about chains.
+    let halves = runtime.plan_stages(&path, 2).expect("two stages planned");
+    let ranges: Vec<(i32, i32)> = halves.iter().map(|plan| (plan.layers.start, plan.layers.end)).collect();
+    // A chain built from the planner's own ranges must open — or be rejected
+    // for the one reason a BERT fixture legitimately has: its stage program
+    // roots an attention mask the installer cannot own. Any other rejection
+    // is a regression, so the reason is pinned rather than tolerated.
     let mut chain = match runtime.open_chain(&path, &ranges) {
         Ok(chain) => chain,
         // StageError has one variant today; no catch-all arm or it is
         // unreachable and rustc rejects it under -D warnings.
         Err(StageError::Rejected(reason)) => {
-            assert!(!reason.is_empty(), "a rejection must explain itself");
-            return; // encoder models cannot install a stage program yet
+            assert!(
+                reason.contains("attention.mask"),
+                "expected the encoder's attention-mask limitation, got: {reason}"
+            );
+            return; // encoder stage programs are not installable yet
         }
     };
     assert_eq!(chain.stages(), 2);
@@ -88,6 +99,56 @@ fn a_chain_runs_every_stage_and_hands_back_a_terminal_frame() {
     if let Some(bytes) = frame {
         assert!(!bytes.is_empty(), "a terminal frame with content must be non-empty");
     }
+}
+
+/// Splitting must not change what crosses a boundary: two chains covering the
+/// same layers — one stage versus two — must return byte-identical terminal
+/// frames. The prefix deliberately stops before the model's last layer: a
+/// terminal stage exports a frontier only when layers still follow it, and a
+/// full-model decoder chain exports nothing (nothing is downstream), which
+/// would make the comparison vacuous. Verified on qwen2.5-0.5b-instruct where
+/// the 3/4-depth prefix frame (28672 bytes) agrees exactly.
+#[test]
+fn a_chain_terminal_frame_is_stage_count_invariant() {
+    let Some(path) = optional_model_path("SKIPPY_TEST_CAUSAL") else {
+        return;
+    };
+    let runtime = Runtime::new().expect("runtime");
+
+    // plan_stages derives contiguous ranges, so the test carries no
+    // hard-coded layer counts.
+    let quarters = runtime.plan_stages(&path, 4).expect("four stages");
+    assert_eq!(quarters.len(), 4, "four stages requested, four returned");
+    let start = quarters[0].layers.start;
+    let split = quarters[2].layers.start;
+    let prefix_end = quarters[2].layers.end;
+    assert!(prefix_end < quarters[3].layers.end, "the prefix must leave layers downstream so the frontier exists");
+
+    let tokens = [Token(1), Token(2), Token(3), Token(4)];
+
+    let mut monolithic = runtime.open_chain(&path, &[(start, prefix_end)]).expect("a prefix chain opens as one stage");
+    let frame_one =
+        monolithic.run(&tokens).expect("one-stage prefill").expect("a prefix terminal stage exports a frontier");
+
+    let mut split_chain =
+        runtime.open_chain(&path, &[(start, split), (split, prefix_end)]).expect("a prefix chain opens as two stages");
+    let frame_two =
+        split_chain.run(&tokens).expect("two-stage prefill").expect("a prefix terminal stage exports a frontier");
+
+    assert_eq!(frame_one, frame_two, "stage count must not change the terminal frame");
+
+    // The full model for contrast: nothing is downstream of the last layer,
+    // so decoder-only chains return no terminal frame — the two sides must
+    // agree on that too.
+    let halves = runtime.plan_stages(&path, 2).expect("two stages");
+    let total = halves[1].layers.end;
+    let mut whole = runtime.open_chain(&path, &[(start, total)]).expect("full model opens as one stage");
+    let mut halved = runtime
+        .open_chain(&path, &[(start, halves[0].layers.end), (halves[0].layers.end, total)])
+        .expect("full model opens as two stages");
+    let frame_whole = whole.run(&tokens).expect("full one-stage prefill");
+    let frame_halved = halved.run(&tokens).expect("full two-stage prefill");
+    assert_eq!(frame_whole, frame_halved, "full-model chains agree as well");
 }
 
 #[test]
