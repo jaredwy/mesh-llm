@@ -1,3 +1,15 @@
+# Core config: built-in checks + the migration checks from docs/ENFORCEMENT.md §5.
+# The boundary checks (skippy-preceded-by, skippy-single-call-site, ...) live in
+# src/llama/.clang-tidy, tools/.clang-tidy and skippy-api-rs/skippy-sys/cpp/.clang-tidy;
+# they must not be enabled here — checks live at the boundaries and nowhere else.
+#
+# Migration checks and their sunsets (docs/ENFORCEMENT.md §5):
+#   skippy-no-expected-void, skippy-optional-error-polarity
+#       sunsets when Fallible<E> has replaced every failure-only result (keep anyway)
+#   skippy-no-void-silencing        never — cheaper than the review comment
+#   skippy-no-process-wide-state    the memo moves into LlamaBackend; keep for the allowlist
+#   skippy-no-raw-loops             never — house style
+#
 # Disabled by judgment, not by accident:
 #   braces-around-statements            single-statement guards stay one line
 #   performance-enum-size               vocabulary types mirror native widths
@@ -8,6 +20,12 @@ Checks: >
   performance-*,
   modernize-*,
   readability-*,
+  cppcoreguidelines-narrowing-conversions,
+  skippy-no-expected-void,
+  skippy-optional-error-polarity,
+  skippy-no-void-silencing,
+  skippy-no-process-wide-state,
+  skippy-no-raw-loops,
   -modernize-use-trailing-return-type,
   -readability-magic-numbers,
   -readability-identifier-length,
@@ -20,3 +38,4 @@ WarningsAsErrors: ''
 CheckOptions:
   bugprone-easily-swappable-parameters.MinimumLength: 3
   readability-redundant-member-init.IgnoreBaseInCopyConstructors: true
+  skippy-no-process-wide-state.AllowedInFunctions: 'skippy::detail::next_generation'

@@ -185,7 +185,7 @@ bool run_stage(Stage& stage, const std::vector<llama_token>& tokens,
     std::cout << "  boundary: parts=" << boundary.part_count << " bytes=" << needed << "\n";
 
     for (int attempt = 0; attempt < 3; ++attempt) {
-        stage.output.resize(needed == 0 ? (1U << 20) : needed);
+        stage.output.resize(needed == 0 ? (1U << 20U) : needed);
         skippy_error* error = nullptr;
         const auto status = skippy_prefill_chunk_frame(
             stage.session, tokens.data(), tokens.size(), input_desc, input, &stage.output_desc,
@@ -213,8 +213,8 @@ std::string compare(const std::vector<std::uint8_t>& left, const std::vector<std
         return "size " + std::to_string(left.size()) + " != " + std::to_string(right.size());
     }
     if (left.empty()) return "both payloads are empty";
-    float* lhs = reinterpret_cast<float*>(const_cast<std::uint8_t*>(left.data()));
-    float* rhs = reinterpret_cast<float*>(const_cast<std::uint8_t*>(right.data()));
+    auto* lhs = reinterpret_cast<float*>(const_cast<std::uint8_t*>(left.data()));
+    auto* rhs = reinterpret_cast<float*>(const_cast<std::uint8_t*>(right.data()));
     const std::size_t count = left.size() / sizeof(float);
     double worst = 0.0;
     for (std::size_t index = 0; index < count; ++index) {
@@ -249,7 +249,7 @@ std::expected<std::vector<llama_token>, std::string> tokenize(skippy_model* mode
 skippy_sampling_config greedy_sampling() {
     skippy_sampling_config sampling{};
     sampling.version = 1;
-    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
+    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED; // NOLINT(bugprone-signed-bitwise): the C ABI declares flags as int and the macro is that ABI
     sampling.seed = 0;
     sampling.temperature = 1.0F;
     sampling.top_k = 1;
@@ -281,7 +281,7 @@ std::expected<llama_token, std::string> predict_chain(std::vector<Stage>& stages
         if (skippy_model_output_activation_boundary(stage.model, &boundary)) {
             needed = boundary_bytes(boundary);
         }
-        std::vector<std::uint8_t> output(needed == 0 ? (1U << 20) : needed);
+        std::vector<std::uint8_t> output(needed == 0 ? (1U << 20U) : needed);
         std::size_t bytes = 0;
         skippy_error* error = nullptr;
         const auto status = skippy_decode_step_frame_sampled(
@@ -305,7 +305,7 @@ std::expected<llama_token, std::string> predict_chain(std::vector<Stage>& stages
         input_desc = &stage.output_desc;
         input = carried.data();
     }
-    if (terminal_frame != nullptr) *terminal_frame = carried;
+    if (terminal_frame != nullptr) *terminal_frame = std::move(carried);
     return predicted;
 }
 
@@ -316,13 +316,13 @@ std::vector<skippy::LayerRange> partition(std::int32_t layers, int count) {
     std::int32_t start = 0;
     for (int index = 0; index < count; ++index) {
         const std::int32_t width = base + (index < remainder ? 1 : 0);
-        ranges.push_back(skippy::LayerRange{start, start + width});
+        ranges.push_back(skippy::LayerRange{.start = start, .end = start + width});
         start += width;
     }
     return ranges;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) { // NOLINT(readability-function-cognitive-complexity,bugprone-exception-escape): a probe main reads as a script; an unexpected throw terminating with the message is the diagnostic
     if (argc < 3) {
         std::cerr
             << "usage: skippy_api_stage_pipeline_probe <model.gguf> <stages> [layers] [text] "
@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
     inputs.shard_paths = {path};
     inputs.tensors = std::move(tensors);
     inputs.profiles = {skippy::ProfileSpec{
-        .id = skippy::ProfileId{"decode"}, .tokens = 512, .sequences = 1, .outputs = 512}};
+        .id = skippy::ProfileId{"decode"}, .tokens = 512, .sequences = 1, .outputs = 512,},};
     inputs.graph_configuration = skippy::GraphConfigurationId{"pipeline"};
     inputs.backend = skippy::BackendId{"metal"};
 
@@ -421,7 +421,7 @@ int main(int argc, char** argv) {
     // Composition check: one stage holding every layer must emit the same
     // terminal payload as the chain.
     Stage monolithic;
-    if (!open_stage(*planner, path, skippy::LayerRange{0, layers}, monolithic)) return 1;
+    if (!open_stage(*planner, path, skippy::LayerRange{.start = 0, .end = layers}, monolithic)) return 1;
     if (!run_stage(monolithic, context, nullptr, nullptr)) return 1;
     std::cout << "single stage: " << payload_size(monolithic) << " bytes\n";
     std::cout << "chain vs single: " << compare(stages.back().output, monolithic.output) << "\n";

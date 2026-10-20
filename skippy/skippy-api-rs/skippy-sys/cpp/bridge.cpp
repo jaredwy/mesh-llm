@@ -101,6 +101,12 @@ template <> struct boundary_status<WorkloadStatus> {
   static constexpr auto allocation = WorkloadStatus::AllocationFailed;
   static constexpr auto internal = WorkloadStatus::InternalError;
 };
+// An enum result is its own status: any failure reads as Unknown, exactly
+// what the hand-rolled ladder in model_family did before it folded into guarded.
+template <> struct boundary_status<ModelFamily> {
+  static constexpr auto allocation = ModelFamily::Unknown;
+  static constexpr auto internal = ModelFamily::Unknown;
+};
 
 template <typename Result> struct status_of {
   using type = decltype(Result::status);
@@ -142,10 +148,32 @@ Result guarded(Body &&body) noexcept {
 // from a hostile file survives instead of vanishing into a dropped catch.
 template <typename Result>
 Result in_band_failed(const std::string &message) noexcept {
-  Result result{};
-  result.ok = false;
-  result.error = rust::String::lossy(message);
-  return result;
+  // No allocation may happen while reporting out-of-memory: the string copy
+  // and the rust::String can themselves throw bad_alloc, and this is
+  // noexcept. ok=false alone is the contract; the message is best-effort.
+  try {
+    Result result{};
+    result.ok = false;
+    result.error = rust::String::lossy(message);
+    return result;
+  } catch (...) {
+    Result bare{};
+    bare.ok = false;
+    return bare;
+  }
+}
+
+// The message-building form: the concat happens inside this function's own
+// catch, never in the noexcept caller's handler (skippy-no-alloc-in-oom-handler).
+template <typename Result>
+Result in_band_failed(const char *where, const char *what) noexcept {
+  try {
+    return in_band_failed<Result>(std::string(where) + ": " + what);
+  } catch (...) {
+    Result bare{};
+    bare.ok = false;
+    return bare;
+  }
 }
 
 // The in-band mirror of guarded<>: the result reports failure through
@@ -158,11 +186,11 @@ Result guarded_message(const char *where, Body &&body) noexcept {
   try {
     return std::forward<Body>(body)();
   } catch (const std::bad_alloc &) {
-    return in_band_failed<Result>(std::string(where) + ": out of memory");
+    return in_band_failed<Result>(where, "out of memory");
   } catch (const std::exception &failure) {
-    return in_band_failed<Result>(std::string(where) + ": " + failure.what());
+    return in_band_failed<Result>(where, failure.what());
   } catch (...) {
-    return in_band_failed<Result>(std::string(where) + ": unknown failure");
+    return in_band_failed<Result>(where, "unknown failure");
   }
 }
 
@@ -257,11 +285,11 @@ rust::String hex_of(std::string_view value) {
   std::string out;
   out.reserve(value.size() * 2);
   for (const char byte : value) {
-    const auto raw = static_cast<unsigned char>(byte);
+    const auto raw = static_cast<unsigned char>(byte); // bounded by char being 8 bits on every ABI here
     out.push_back(kHex[(raw >> 4U) & 0xFU]);
     out.push_back(kHex[raw & 0xFU]);
   }
-  return rust::String(std::move(out));
+  return rust::String::lossy(out);
 }
 
 /// Splits [0, layers) into `stage_count` contiguous ranges. Both inputs are
@@ -274,9 +302,9 @@ split_layers(std::int32_t layers, std::uint32_t stage_count) {
     return std::unexpected("a split needs at least one stage");
   if (layers <= 0)
     return std::unexpected("the model has no layers");
-  if (stage_count > static_cast<std::uint32_t>(layers))
+  if (stage_count > static_cast<std::uint32_t>(layers)) // bounded by layers > 0 two lines up
     return std::unexpected("stage count exceeds the model's layer count");
-  const auto count = static_cast<std::int32_t>(stage_count);
+  const auto count = static_cast<std::int32_t>(stage_count); // bounded by stage_count <= layers <= INT32_MAX above
   std::vector<skippy::LayerRange> ranges;
   ranges.reserve(stage_count);
   const std::int32_t base = layers / count;
@@ -446,15 +474,13 @@ StagedEmbedResult Bridge::staged_embed(StagedSession& session, rust::Slice<const
 }
 
 ModelFamily Bridge::model_family(rust::Str path) const noexcept {
-    try {
-      const std::string model_path(path);
-      auto architecture = skippy::probe::model_architecture(model_path);
-      if (!architecture) return ModelFamily::Unknown;
-      return to_ffi(skippy::family_of(*architecture));
-    } catch (...) {
-      // Any failure - including bad_alloc copying the path - reads as unknown.
-      return ModelFamily::Unknown;
-    }
+  // Any failure - including bad_alloc copying the path - reads as unknown.
+  return guarded<ModelFamily>([&]() -> ModelFamily {
+    const std::string model_path(path);
+    auto architecture = skippy::probe::model_architecture(model_path);
+    if (!architecture) return ModelFamily::Unknown;
+    return to_ffi(skippy::family_of(*architecture));
+  });
 }
 
 ChainValidation Bridge::validate_chain(rust::Str path,

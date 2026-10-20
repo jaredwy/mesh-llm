@@ -317,6 +317,7 @@ skippy-api-verify embed_model="" reranker_model="" causal_model="" *ARGS="":
     printf '%s\n' '== clang-format' >&2
     just skippy-llama-api-format-check
     printf '%s\n' '== clang-tidy' >&2
+    just skippy-tidy-plugin-build
     just skippy-llama-api-tidy '*'
     printf '%s\n' '== C++ tests' >&2
     just skippy-llama-api-test
@@ -520,7 +521,38 @@ skippy-llama-api-format-check:
       -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
     cmake --build "$build_dir" --target format-check
 
+# Build the out-of-tree clang-tidy module in tidy/. The plugin must match the
+# LLVM that owns the clang-tidy binary, so both come from the same prefix.
+[unix]
+skippy-tidy-plugin-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    llvm="${SKIPPY_LLVM_PREFIX:-/opt/homebrew/opt/llvm}"
+    if [[ ! -x "$llvm/bin/clang-tidy" && -x "$(command -v clang-tidy)" ]]; then
+      llvm="$(dirname "$(dirname "$(command -v clang-tidy)")")"
+    fi
+    cmake -S skippy/skippy_api/tidy -B target/skippy-tidy -G Ninja \
+      -DClang_DIR="$llvm/lib/cmake/clang" \
+      -DCMAKE_CXX_COMPILER="$llvm/bin/clang++" \
+      -DCMAKE_BUILD_TYPE=Release
+    cmake --build target/skippy-tidy --parallel
+    ctest --test-dir target/skippy-tidy --output-on-failure
+
+# Run the tidy module's fixture suite (one FileCheck test per check).
+[unix]
+skippy-tidy-fixtures:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -f target/skippy-tidy/SkippyTidyChecks.so ]]; then
+      just skippy-tidy-plugin-build
+    fi
+    ctest --test-dir target/skippy-tidy --output-on-failure
+
 # Fails on any finding. Pass check names to narrow the gate, e.g. `bugprone-*`.
+# Boundary scope comes from the per-directory .clang-tidy files
+# (docs/ENFORCEMENT.md §5): src/llama and tools carry the llama boundary
+# checks, the bridge carries the Rust boundary checks, the core carries the
+# migration checks. The plugin is loaded whenever it is built.
 [positional-arguments]
 skippy-llama-api-tidy *CHECKS="":
     #!/usr/bin/env bash
@@ -539,6 +571,10 @@ skippy-llama-api-tidy *CHECKS="":
       printf '%s\n' 'clang-tidy not found; set SKIPPY_CLANG_TIDY to its path' >&2
       exit 1
     fi
+    load_args=()
+    if [[ -f target/skippy-tidy/SkippyTidyChecks.so ]]; then
+      load_args=(--load=target/skippy-tidy/SkippyTidyChecks.so)
+    fi
     checks="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     # Configure only: the compile database is written by CMake, and the direct
@@ -548,10 +584,33 @@ skippy-llama-api-tidy *CHECKS="":
       -DCMAKE_BUILD_TYPE=Debug \
       -DSKIPPY_API_BUILD_TESTS=OFF \
       -DSKIPPY_API_BUILD_BENCHMARKS=OFF \
+      -DSKIPPY_API_BUILD_PLANNER_PROBE=ON \
       -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
     cd skippy/skippy_api
     "$tidy" -p "$build_path" --warnings-as-errors="${checks:-*}" \
-      $(find src -name '*.cpp' | sort)
+      "${load_args[@]+"${load_args[@]}"}" \
+      $(find src tools -name '*.cpp' | sort)
+    cd "$repo_root"
+    # The bridge has no compile database (cxx_build compiles it); the flags
+    # below mirror build.rs. Generated headers stay outside the filter.
+    cxx_include="$(find "$HOME/.cargo/registry/src" -maxdepth 4 -path '*/cxx-*/include' -type d | sort | tail -1)"
+    "$tidy" --warnings-as-errors="${checks:-*}" \
+      "${load_args[@]+"${load_args[@]}"}" \
+      skippy/skippy-api-rs/skippy-sys/cpp/bridge.cpp -- \
+      -std=c++2b \
+      -I skippy/skippy-api-rs \
+      -I skippy/skippy_api/include \
+      -I .deps/llama.cpp/include \
+      -I .deps/llama.cpp/ggml/include \
+      -I skippy/skippy-api-rs/target/cxxbridge \
+      -I "$cxx_include"
+    # A NOLINT carries a reason (docs/ENFORCEMENT.md §1); a bare one is a
+    # rule violation.
+    bare=$(grep -rn 'NOLINT(' skippy/skippy_api/include skippy/skippy_api/src skippy/skippy_api/tools skippy/skippy-api-rs/skippy-sys/cpp --include='*.h' --include='*.cpp' | grep -v ': ' || true)
+    if [[ -n "$bare" ]]; then
+      printf '%s\n' 'bare NOLINT (a NOLINT carries a reason):' "$bare" >&2
+      exit 1
+    fi
 
 # just skippy-llama-api-sanitize                 -> address;undefined
 # just skippy-llama-api-sanitize thread

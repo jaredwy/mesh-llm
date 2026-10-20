@@ -51,7 +51,7 @@ double microseconds(std::size_t iterations, const std::function<void()>& work) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) { // NOLINT(readability-function-cognitive-complexity,bugprone-exception-escape): a probe main reads as a script; an unexpected throw terminating with the message is the diagnostic
     if (argc < 2) {
         std::cerr << "usage: skippy_api_planner_probe <model.gguf> [layer_count]\n";
         return 2;
@@ -88,9 +88,9 @@ int main(int argc, char** argv) {
     // per-family state annotations that patch 0004 added.
     inputs.profiles = {
         skippy::ProfileSpec{
-            .id = skippy::ProfileId{"decode"}, .tokens = 512, .sequences = 1, .outputs = 1},
+            .id = skippy::ProfileId{"decode"}, .tokens = 512, .sequences = 1, .outputs = 1,},
         skippy::ProfileSpec{
-            .id = skippy::ProfileId{"embed"}, .tokens = 512, .sequences = 1, .outputs = 512}};
+            .id = skippy::ProfileId{"embed"}, .tokens = 512, .sequences = 1, .outputs = 512,},};
     inputs.graph_configuration = skippy::GraphConfigurationId{"probe"};
     inputs.backend = skippy::BackendId{"metal"};
 
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
     realize_ms = milliseconds([&] {
         const auto start = argc > 3 ? std::stoi(argv[3]) : 0;
         const auto end = argc > 4 ? std::stoi(argv[4]) : static_cast<std::int32_t>(layers);
-        plan = planner.realize(skippy::LayerRange{start, end});
+        plan = planner.realize(skippy::LayerRange{.start = start, .end = end});
     });
     if (!plan) {
         std::cerr << "realize rejected: " << plan.error().message << "\n";
@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
 
             std::vector<const char*> residents;
             for (const std::string& name : spec.resident_identities) {
-                residents.push_back(name.c_str());
+                residents.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
             }
             config.resident_tensor_names = residents.empty() ? nullptr : residents.data();
             config.resident_tensor_name_count = residents.size();
@@ -189,10 +189,10 @@ int main(int argc, char** argv) {
             std::vector<const char*> import_ids;
             std::vector<const char*> import_bindings;
             for (const std::string& name : spec.import_identities) {
-                import_ids.push_back(name.c_str());
+                import_ids.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
             }
             for (const std::string& name : spec.import_bindings) {
-                import_bindings.push_back(name.c_str());
+                import_bindings.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
             }
             config.activation_import_identities = import_ids.empty() ? nullptr : import_ids.data();
             config.activation_import_identity_count = import_ids.size();
@@ -202,10 +202,10 @@ int main(int argc, char** argv) {
             std::vector<const char*> export_ids;
             std::vector<const char*> export_bindings;
             for (const std::string& name : spec.export_identities) {
-                export_ids.push_back(name.c_str());
+                export_ids.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
             }
             for (const std::string& name : spec.export_bindings) {
-                export_bindings.push_back(name.c_str());
+                export_bindings.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
             }
             config.activation_export_identities = export_ids.empty() ? nullptr : export_ids.data();
             config.activation_export_identity_count = export_ids.size();
@@ -242,14 +242,14 @@ int main(int argc, char** argv) {
         static skippy::llama::LlamaBackend probe_backend;
         auto first_lease = probe_backend.plan_model_stages(
             path, std::array<skippy::LayerRange, 1>{
-                      skippy::LayerRange{0, static_cast<std::int32_t>(layers)}});
+                      skippy::LayerRange{.start = 0, .end = static_cast<std::int32_t>(layers)},});
         const double first_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                 .count();
         const auto cached_start = std::chrono::steady_clock::now();
         auto second_lease = probe_backend.plan_model_stages(
             path, std::array<skippy::LayerRange, 1>{
-                      skippy::LayerRange{0, static_cast<std::int32_t>(layers)}});
+                      skippy::LayerRange{.start = 0, .end = static_cast<std::int32_t>(layers)},});
         const double cached_ms = std::chrono::duration<double, std::milli>(
                                      std::chrono::steady_clock::now() - cached_start)
                                      .count();
