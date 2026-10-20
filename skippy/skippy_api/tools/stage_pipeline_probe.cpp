@@ -267,13 +267,33 @@ std::expected<llama_token, std::string> predict_chain(std::vector<Stage>& stages
     llama_token predicted = -1;
 
     for (Stage& stage : stages) {
-        std::vector<std::uint8_t> output(1U << 20);
+        // Size the decode frame from the stage's own activation boundary and
+        // retry on BUFFER_TOO_SMALL, exactly like the prefill path: a fixed
+        // 1 MiB guess fails misleadingly on a larger frame.
+        std::size_t needed = 0;
+        skippy_activation_boundary_desc boundary{};
+        if (skippy_model_output_activation_boundary(stage.model, &boundary)) {
+            needed = boundary_bytes(boundary);
+        }
+        std::vector<std::uint8_t> output(needed == 0 ? (1U << 20) : needed);
         std::size_t bytes = 0;
         skippy_error* error = nullptr;
         const auto status = skippy_decode_step_frame_sampled(
             stage.session, next, &sampling, input_desc, input, &stage.output_desc, output.data(),
             output.size(), &bytes, &predicted, &error);
-        if (status != SKIPPY_STATUS_OK) return std::unexpected(message_of(status, error));
+        if (status == SKIPPY_STATUS_BUFFER_TOO_SMALL && bytes > 0) {
+            if (error != nullptr) skippy_error_free(error);
+            output.resize(bytes);
+            skippy_error* retry = nullptr;
+            const auto again =
+                skippy_decode_step_frame_sampled(
+                    stage.session, next, &sampling, input_desc, input, &stage.output_desc,
+                    output.data(), output.size(), &bytes, &predicted, &retry);
+            if (again != SKIPPY_STATUS_OK)
+                return std::unexpected(message_of(again, retry));
+        } else if (status != SKIPPY_STATUS_OK) {
+            return std::unexpected(message_of(status, error));
+        }
         output.resize(bytes);
         carried = std::move(output);
         input_desc = &stage.output_desc;
@@ -362,6 +382,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::cout << "tokens: " << tokens->size() << "\n";
+    if (tokens->size() < 2) {
+        std::cerr << "need at least two tokens: one of context and one to predict\n";
+        return 2;
+    }
 
     // Chain: stage 0 sees no input, each later stage consumes the previous one.
     // The chain and the reference below both predict the token after the text,
