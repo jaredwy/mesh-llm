@@ -30,7 +30,7 @@ void OptionalErrorPolarityCheck::check(const MatchFinder::MatchResult& Result) {
     if (!ErrorType_.match(Name)) return;
     diag(Conv->getBeginLoc(),
          "std::optional<%0> is a failure channel (engaged means it failed); converting it to bool "
-         "inverts under the expected<void,E> migration. Spell .has_value(), or use Fallible<%0>")
+         "inverts. Spell .has_value(), or return std::expected<void, %0> (docs/ENFORCEMENT.md §4)")
         << Name;
 }
 

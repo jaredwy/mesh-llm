@@ -1,6 +1,6 @@
 # skippy clang-tidy checks
 
-Thirteen out-of-tree clang-tidy checks for the `skippy_api` rules that a type
+Eighteen out-of-tree clang-tidy checks for the `skippy_api` rules that a type
 cannot carry (see `../docs/ENFORCEMENT.md` §1 for when a rule is a type and when it is a
 check). Built and tested against LLVM 18; every API used is unchanged through
 LLVM 20.
@@ -27,7 +27,7 @@ cmake -S skippy/skippy_api/tidy -B target/skippy-tidy \
 # Debian/Ubuntu
 cmake -S skippy/skippy_api/tidy -B target/skippy-tidy -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
 cmake --build target/skippy-tidy --parallel
-ctest --test-dir target/skippy-tidy           # 12 fixtures
+ctest --test-dir target/skippy-tidy           # 18 fixtures
 ```
 
 Loading needs a clang-tidy built with plugin support (Homebrew and Debian are).
@@ -94,6 +94,11 @@ skippy-llama-api-tidy:
 | `skippy-no-void-silencing` | `(void)x` on a local with no other use is a dead computation | the `(void)imports…` blocks in materialize/clone |
 | `skippy-no-process-wide-state` | no mutable namespace-scope/static-local state outside the allowlist | the memo index (P3-5) |
 | `skippy-rust-string-lossy` | native text crosses the bridge through `rust::String::lossy` | every `rust::String(message)` before 136020b3 |
+| `skippy-boundary-isolation` | tree-wide | native includes, calls and types live only in src/llama, include/llama, tools, benchmarks, skippy-sys/cpp (ENFORCEMENT.md §0) |
+| `skippy-no-throwing-accessor` | tree-wide | `.value()` never appears; results compose (ENFORCEMENT.md §4) |
+| `skippy-no-failure-optional` | tree-wide | `std::optional<E>`-as-failure is banned; the failure-only spelling is `std::expected<void, E>` (ENFORCEMENT.md §4) |
+| `skippy-no-mutex` | tree-wide | no mutex anywhere — RCU snapshots and CAS (ENFORCEMENT.md §3.2) |
+| `skippy-no-raw-pointer` | tree-wide | views over raw pointers; raw pointers only in owning cells and the ABI struct (ENFORCEMENT.md §4) |
 | `skippy-explicit-narrowing` | an integer cast that can lose value is `narrow<>()`, a fitting constant, or carries `// bounded by …` | `arena_put` ×2, the three layer casts |
 | `skippy-const-native-mutation` | a const method never hands a member to a native function through a non-const pointer | AGENTS "const means what it says" |
 

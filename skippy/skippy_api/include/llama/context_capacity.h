@@ -23,7 +23,7 @@ public:
         : sequences_{std::max(1U, llama_n_seq_max(&context))},
           tokens_{
               std::min({llama_n_ctx(&context), llama_n_batch(&context), llama_n_ubatch(&context)}) /
-              sequences_.value} {}
+              sequences_.value,} {}
 
     [[nodiscard]] constexpr bool serves(const SessionGeometry& geometry) const noexcept {
         return tokens_ >= geometry.tokens() && sequences_ >= geometry.sequences();

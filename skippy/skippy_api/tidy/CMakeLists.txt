@@ -11,7 +11,10 @@ find_package(LLVM REQUIRED CONFIG HINTS "${Clang_DIR}/../llvm")
 
 add_library(SkippyTidyChecks MODULE
     SkippyTidyModule.cpp
+    checks/BoundaryIsolationCheck.cpp
     checks/NoExpectedVoidCheck.cpp
+    checks/NoFailureOptionalCheck.cpp
+    checks/NoMutexCheck.cpp
     checks/NoRawLoopsCheck.cpp
     checks/OptionalErrorPolarityCheck.cpp
     checks/PrecededByCheck.cpp
@@ -21,6 +24,8 @@ add_library(SkippyTidyChecks MODULE
     checks/NoLockAcrossNativeCallCheck.cpp
     checks/NoVoidSilencingCheck.cpp
     checks/NoProcessWideStateCheck.cpp
+    checks/NoRawPointerCheck.cpp
+    checks/NoThrowingAccessorCheck.cpp
     checks/RustStringLossyCheck.cpp
     checks/ExplicitNarrowingCheck.cpp
     checks/ConstNativeMutationCheck.cpp

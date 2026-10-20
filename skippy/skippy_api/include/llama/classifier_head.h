@@ -31,7 +31,10 @@ public:
         // Width from the tensor itself; n_cls_out only confirms it.
         const auto width = found->dimension_count >= 2 ? narrow<std::uint32_t>(found->dimensions[1])
                                                        : std::nullopt;
-        return width.transform([](std::uint32_t outputs) { return ClassifierHead{outputs}; });
+        // A guarded read, not transform(): optional::transform calls the
+        // throwing accessor internally, and detect is noexcept.
+        if (!width.has_value()) return std::nullopt;
+        return ClassifierHead{*width};
     }
 
     [[nodiscard]] constexpr std::uint32_t outputs() const noexcept { return outputs_; }

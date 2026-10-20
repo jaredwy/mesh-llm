@@ -4,13 +4,18 @@
 #include "clang-tidy/ClangTidyModule.h"
 #include "clang-tidy/ClangTidyModuleRegistry.h"
 
+#include "checks/BoundaryIsolationCheck.h"
 #include "checks/BridgeBarrierCheck.h"
 #include "checks/ConstNativeMutationCheck.h"
 #include "checks/ExplicitNarrowingCheck.h"
 #include "checks/NoAllocInOomHandlerCheck.h"
 #include "checks/NoExpectedVoidCheck.h"
+#include "checks/NoFailureOptionalCheck.h"
+#include "checks/NoMutexCheck.h"
 #include "checks/NoLockAcrossNativeCallCheck.h"
 #include "checks/NoProcessWideStateCheck.h"
+#include "checks/NoRawPointerCheck.h"
+#include "checks/NoThrowingAccessorCheck.h"
 #include "checks/NoRawLoopsCheck.h"
 #include "checks/NoVoidSilencingCheck.h"
 #include "checks/OptionalErrorPolarityCheck.h"
@@ -24,6 +29,11 @@ class SkippyModule : public ClangTidyModule {
 public:
     void addCheckFactories(ClangTidyCheckFactories& Factories) override {
         Factories.registerCheck<NoExpectedVoidCheck>("skippy-no-expected-void");
+        Factories.registerCheck<NoFailureOptionalCheck>("skippy-no-failure-optional");
+        Factories.registerCheck<NoMutexCheck>("skippy-no-mutex");
+        Factories.registerCheck<NoRawPointerCheck>("skippy-no-raw-pointer");
+        Factories.registerCheck<NoThrowingAccessorCheck>("skippy-no-throwing-accessor");
+        Factories.registerCheck<BoundaryIsolationCheck>("skippy-boundary-isolation");
         Factories.registerCheck<NoRawLoopsCheck>("skippy-no-raw-loops");
         Factories.registerCheck<OptionalErrorPolarityCheck>("skippy-optional-error-polarity");
         Factories.registerCheck<PrecededByCheck>("skippy-preceded-by");
@@ -61,6 +71,13 @@ public:
         Opts["skippy-rust-string-lossy.AsciiProducers"] = "::hex_of$";
         Opts["skippy-explicit-narrowing.AllowedFunctions"] = "skippy::narrow;skippy::checked_mul";
         Opts["skippy-explicit-narrowing.AllowedFiles"] = "narrow\\.h$";
+        Opts["skippy-boundary-isolation.AllowedDirectories"] =
+            "src/llama/;include/llama/;/tools/;/benchmarks/;skippy-sys/cpp/";
+        Opts["skippy-boundary-isolation.NativeRegex"] = "(^|::)(llama_|ggml_|skippy_)";
+        Opts["skippy-boundary-isolation.NativeHeaderRegex"] =
+            "^(llama|llama-cpp|ggml|ggml-alloc|ggml-backend|gguf|skippy)\\.h$";
+        Opts["skippy-no-failure-optional.ErrorTypeRegex"] = "(Error|Failure)$";
+        Opts["skippy-no-raw-pointer.AllowedNames"] = "(^|::)(native|argv|optarg)$";
         return Options;
     }
 };
