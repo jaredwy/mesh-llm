@@ -74,17 +74,30 @@ std::optional<StagedFailure> StageChain::prefill(std::span<const llama_token> to
     if (auto failure = run_stage(0, tokens, nullptr, frame_hint); failure.has_value()) {
         return failure;
     }
-    std::size_t carrying = 0;
     for (std::size_t index = 1; index < stages_.size(); ++index) {
         // Hand the previous stage's buffer over directly: no copy, no new frame.
         if (auto failure = run_stage(index, tokens, &stages_[index - 1].out, frame_hint);
             failure.has_value()) {
             return failure;
         }
-        if (stages_[index].out.written().empty()) break; // terminal: nothing crosses
-        carrying = index;
+        // An empty export from the final stage is the model's real answer:
+        // no frontier follows the last layer, and the sink must see exactly
+        // that, not an earlier stage's intermediate frame. An empty export
+        // anywhere else is a broken chain — the next stage would run without
+        // its input — so it fails instead of silently surfacing a partial
+        // frame.
+        if (stages_[index].out.written().empty()) {
+            if (index + 1 < stages_.size()) {
+                return StagedFailure{
+                    .status = 0,
+                    .message = "stage " + std::to_string(index) +
+                               " exported nothing but the chain continues",
+                };
+            }
+            break;
+        }
     }
-    const PreparedExport& terminal = stages_[carrying].out;
+    const PreparedExport& terminal = stages_.back().out;
     if (auto reason = sink.consume(skippy::FrameBytes{terminal.written()}); reason.has_value()) {
         return StagedFailure{.status = 0, .message = std::move(*reason)};
     }
