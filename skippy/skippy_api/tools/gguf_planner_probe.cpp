@@ -181,7 +181,7 @@ int main(int argc, char** argv) { // NOLINT(readability-function-cognitive-compl
 
             std::vector<const char*> residents;
             for (const std::string& name : spec.resident_identities) {
-                residents.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
+                residents.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops the upstream skippy_bytes_ref patch deletes (docs/TYPE_DESIGN.md T5 disposition)
             }
             config.resident_tensor_names = residents.empty() ? nullptr : residents.data();
             config.resident_tensor_name_count = residents.size();
@@ -189,10 +189,10 @@ int main(int argc, char** argv) { // NOLINT(readability-function-cognitive-compl
             std::vector<const char*> import_ids;
             std::vector<const char*> import_bindings;
             for (const std::string& name : spec.import_identities) {
-                import_ids.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
+                import_ids.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops the upstream skippy_bytes_ref patch deletes (docs/TYPE_DESIGN.md T5 disposition)
             }
             for (const std::string& name : spec.import_bindings) {
-                import_bindings.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
+                import_bindings.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops the upstream skippy_bytes_ref patch deletes (docs/TYPE_DESIGN.md T5 disposition)
             }
             config.activation_import_identities = import_ids.empty() ? nullptr : import_ids.data();
             config.activation_import_identity_count = import_ids.size();
@@ -202,10 +202,10 @@ int main(int argc, char** argv) { // NOLINT(readability-function-cognitive-compl
             std::vector<const char*> export_ids;
             std::vector<const char*> export_bindings;
             for (const std::string& name : spec.export_identities) {
-                export_ids.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
+                export_ids.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops the upstream skippy_bytes_ref patch deletes (docs/TYPE_DESIGN.md T5 disposition)
             }
             for (const std::string& name : spec.export_bindings) {
-                export_bindings.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops StagedRuntimeConfig deletes (docs/TYPE_DESIGN.md T5)
+                export_bindings.push_back(name.c_str()); // NOLINT(performance-inefficient-vector-operation): one of the six hand-rolled c-string loops the upstream skippy_bytes_ref patch deletes (docs/TYPE_DESIGN.md T5 disposition)
             }
             config.activation_export_identities = export_ids.empty() ? nullptr : export_ids.data();
             config.activation_export_identity_count = export_ids.size();

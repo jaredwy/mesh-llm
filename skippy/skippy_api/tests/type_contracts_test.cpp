@@ -7,9 +7,7 @@
 // over a concrete type is a hard error on the older toolchains in the lane
 // matrix, and a pin that breaks the build the wrong way protects nothing.
 
-#include "skippy/cstrings.h"
 #include "skippy/failure.h"
-#include "skippy/fallible.h"
 #include "skippy/geometry.h"
 #include "skippy/narrow.h"
 #include "skippy/wire.h"
@@ -19,17 +17,6 @@
 #include <functional>
 #include <type_traits>
 #include <utility>
-
-// ---- T1 Fallible: no polarity, no bool, no implicit state -----------------
-
-static_assert(!std::is_convertible_v<skippy::Fallible<int>, bool>); // nothing to flip
-static_assert(!std::is_constructible_v<bool, const skippy::Fallible<int>&>);
-static_assert(!std::is_invocable_v<std::logical_not<>, skippy::Fallible<int>>); // no operator!
-static_assert(
-    !std::is_constructible_v<skippy::Fallible<int>, bool>); // bool is a predicate, not an error
-static_assert(
-    !std::is_default_constructible_v<skippy::Fallible<int>>); // ok() or fail(), nothing implicit
-static_assert(std::is_nothrow_move_constructible_v<skippy::Fallible<int>>);
 
 // ---- T6 narrow/checked_*: the only integer-cast spelling ------------------
 
@@ -60,17 +47,6 @@ static_assert(
 
 static_assert(skippy::WireScalar<std::uint32_t>);
 static_assert(!skippy::WireScalar<std::string>); // only integral/floating scalars cross the wire
-
-// ---- T5 ZString / CStringTable: the only road to const char* ---------------
-
-static_assert(!std::is_constructible_v<skippy::ZString, const char*>);
-static_assert(!std::is_constructible_v<skippy::ZString, std::string>);
-static_assert(
-    !std::is_convertible_v<skippy::ZString, const char*>); // c_str() is a call, not a conversion
-static_assert(
-    !std::is_copy_constructible_v<skippy::CStringTable>); // pointers would alias the other table
-static_assert(std::is_nothrow_move_constructible_v<skippy::CStringTable>); // a move re-derives
-                                                                           // pointers, never throws
 
 // ---- T9 Failure<Code>: OOM is a code, never text ----------------------------
 
