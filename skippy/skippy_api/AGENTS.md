@@ -65,16 +65,36 @@ thing that survives it.
   (§7). The types that make the PR #2481 bug classes unrepresentable are
   specified in `docs/TYPE_DESIGN.md` and land in `include/`; their forbidden
   spellings are pinned in `tests/type_contracts_test.cpp`.
+- **Current phase: isolate the boundaries, defer the strong types**
+  (docs/ENFORCEMENT.md §0). Every native call, native type and native header
+  lives in `src/llama`, `include/llama`, `tools`, `benchmarks` and
+  `skippy-sys/cpp`, and nowhere else — enforced tree-wide by
+  `skippy-boundary-isolation`, so the core compiles without llama by
+  construction. A new strong type lands only where it backs a code change
+  that closes a P0 (the pool's capacity label, classifier-head detection);
+  when the type designs are picked up again, each type replaces its check in
+  the same commit.
+- **Results live in C++-owned, object-local storage and cross the bridge as
+  views, never as copies.** Session scratch (`tokens_`, `embedding_`,
+  `scores_`) and the plan arena are sized once and reused; a mutating call
+  returns a status, a `const` accessor returns the view, and Rust copies only
+  when the caller asks (`to_vec()`). A fallible view is two bridge calls
+  wrapped into one Rust method returning `Result<&[T], E>` borrowed from
+  `&mut self`. Borrowing is Rust's job; C++ holds the memory
+  (docs/ENFORCEMENT.md §3.2).
 - **No out-parameters above the C ABI.** Functions return their result. The only
   out-params are inside `skippy_*` calls we do not own, and they stop at the
   wrapper.
-- **A result that can only fail is `Fallible<E>`.** Never
-  `std::expected<void, E>`, never `std::optional<E>` as a failure channel,
-  never `bool`. `Fallible` has no `operator bool`, so a polarity flip does
-  not compile; the call site reads `if (auto r = validate(x); r.failed())
-  return r;`. `std::expected<T, E>` stays for value-returning calls.
-  *Migration checks:* `skippy-no-expected-void`,
-  `skippy-optional-error-polarity` (docs/ENFORCEMENT.md §4).
+- **Results compose; they are not inspected.** `std::expected`/`std::optional`
+  are consumed with `and_then`/`transform`/`or_else`/`transform_error`/
+  `value_or`; an `if (!result)` ladder is allowed only where the branches do
+  different work than "propagate". `.value()` never appears — it is the only
+  throwing accessor on either type. **A failure-only result has one spelling,
+  and it chains: `std::expected<void, E>`** — `optional<E>`-as-failure cannot
+  compose (`optional::and_then` runs on the engaged value, i.e. the failure);
+  never a bare `optional<E>` failure channel, never `bool`.
+  *Migration checks:* `skippy-no-throwing-accessor` (never sunsets),
+  `skippy-no-failure-optional` (docs/ENFORCEMENT.md §4).
 - **Never swallow a caught exception's message.** `catch (const std::exception&)`
   plus a generic error code makes OOM indistinguishable from a backend failure;
   the backend's `what()` must survive into the failure the caller sees
@@ -193,15 +213,16 @@ thing that survives it.
   write-heavy), and anything borrowed out of the snapshot must be returned
   behind a lease that pins it (`PlanLease` is the pattern; without it the views
   dangle the moment a later publish drops the old index).
-- **CAS before mutex, scoped before global.** Reach for `compare_exchange` and
-  atomics wherever a mutex is only protecting a cache; if a mutex is genuinely
-  needed (complex invariants that cannot be expressed as a publish), hold it
-  for the shortest scope possible — a `std::scoped_lock` acquired immediately
-  before the shared state and released immediately after, never stored, never
-  held across a call into llama or an allocation the caller controls. A mutex
-  that is held across a call into the backend is a deadlock and a serialiser
-  hiding as a lock; if you find yourself holding one that long, the state wants
-  to be an RCU snapshot instead.
+- **No mutex, anywhere.** Shared state is an RCU snapshot behind
+  `atomic_shared_ptr` (`PlanStore`, the inventory memo) or a CAS over atomics
+  (`ContextPool`: `atomic<llama_context*>` slots, claim with `exchange`,
+  place with `compare_exchange` from `nullptr`). If an invariant seems to
+  need a lock, the state wants to be a snapshot. CAS and atomics are the
+  design, not a preference; a mutex held across a call into llama is a
+  deadlock and a serialiser hiding as a lock.
+  *Check, tree-wide:* `skippy-no-mutex` (never sunsets);
+  `skippy-no-lock-across-native-call` stays for third-party code paths
+  (docs/ENFORCEMENT.md §3.2).
 - **llama returns before the backend finishes.** `llama_decode`/`llama_encode`
   may hand control back with work still in flight; the embeddings getters
   synchronise, `llama_memory_clear` and the retained-context pool do not.
@@ -503,8 +524,10 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   (`resident_tensor_at_v1` returns an identity, not a name). Hex-encode them.
   (Boundary: native → Rust text. The other identity boundary — native → C
   ABI — is the arena/NUL trap two entries down; they are different roads and
-  different rules. Rung 1 artefact for the C-ABI road: `ZString` /
-  `CStringTable`, docs/TYPE_DESIGN.md T5, settles P2-7.)
+  different rules. The C-ABI road's fix is upstream-shaped: the
+  `skippy_bytes_ref` / `skippy_runtime_config_v2` patch with an `UPSTREAM.md`
+  entry and a `blocked-upstream` row — not a string type in the façade
+  (docs/ENFORCEMENT.md §4, "The ABI gets views too").)
 - **cxx cannot hold a non-copyable C++ object by value.** Use `UniquePtr<T>`,
   methods taking `Pin<&mut T>`, and declare `type T;` in the bridge block.
 - **The formatter reflows lambdas.** A `str.replace()` over formatted C++ can
@@ -516,9 +539,10 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   rest of the arena into one garbage tensor name and the loader rejects it
   with a several-hundred-character "resident tensor". Copy to owning
   `std::string`s first — `staged.cpp`'s `own()` is the pattern — then take
-  `.c_str()`. Rung 1 upgrade: `ZString` / `CStringTable` are the only road
-  to `const char*`, and `ArenaView` exposes `bytes()` but not `data()`
-  (docs/TYPE_DESIGN.md T5; would have caught the probe bug).
+  `.c_str()`. The lasting fix is upstream-shaped — `skippy_bytes_ref` hands
+  the ABI `(pointer, length)` pairs so nothing NUL-terminates — with the
+  arena-terminated fallback feature-tested on the ABI version macro until
+  the patch lands (would have caught the probe bug).
 - **`ffi_vs_api_benchmark.cpp` warnings are errors.** A `nodiscard` result must
   be `(void)`-cast, and the benchmark will fail to compile (not run) if missed.
 

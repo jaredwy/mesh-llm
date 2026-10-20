@@ -11,6 +11,14 @@ The enforcement ladder these types sit at is
 also takes rung 2 (`SKIPPY_DELETE` + a pinned `static_assert`) where it
 retires a spelling.
 
+**Phase (ENFORCEMENT.md §0):** these designs are the long-term order, not the
+current mechanism. No new strong types land for now — the boundary stays put
+with `skippy-boundary-isolation`, and a type is introduced only where it
+backs a code change that closes a P0 (`ContextCapacity` behind the pool's
+capacity label, `ClassifierHead` behind head detection). When the designs are
+picked up again, each type replaces the check that held its rule, and the
+check is deleted in the same commit.
+
 ## The three moves
 
 Every type below uses one or more of these. They are what turns a review
@@ -56,11 +64,11 @@ attached. Put the rule in the error message.
 
 | bug (review id) | what let it happen | type that removes it |
 |---|---|---|
-| polarity flip on `expected<void,E>` → `optional<E>` (AGENTS trap, P2-1) | `optional` has `operator bool`; `!result` means the opposite in the two spellings | **T1 `Fallible<E>`** — no `operator bool` |
-| `bool` as an error channel (`assign` lambda, P1-10) | `bool` converts from anything | T1 (`Fallible` is not constructible from `bool`) |
+| polarity flip between `expected<void,E>` and `optional<E>` (AGENTS trap, P2-1) | two spellings where `!result` means the opposite; results inspected instead of composed | **T1 — removed.** one spelling tree-wide: `std::expected<void, E>`, consumed with `and_then`/`transform` (`skippy-no-failure-optional`, `skippy-no-throwing-accessor`) |
+| `bool` as an error channel (`assign` lambda, P1-10) | `bool` converts from anything | the failure-only result is `std::expected<void, E>` (T1 disposition) |
 | pool relabel → `GGML_ASSERT` (P0-A); earlier mislabel (P1-5); moved-from argument trap | capacity, request and `n_ctx` were all `uint32_t`; `recycle` took labels from the caller; `batch_limit_` was a field nobody had to read | **T2 `SessionGeometry` / `ContextCapacity`**, **T3 `AdmittedBatch`** |
 | `n_cls_out` default read as presence (P0-1 → P0-B) | a count with a non-zero default stood in for "is there a head"; classification could be fed a family | **T4 `ClassifierHead`** (optional, detected from the tensor table) |
-| identities into `const char*` (P2-7, the two arena traps, six copies of the `const char*` loop) | `string_view::data()` compiles wherever `const char*` is wanted | **T5 `ZString` / `CStringTable`** |
+| identities into `const char*` (P2-7, the two arena traps, six copies of the `const char*` loop) | the C ABI takes `const char*` where the planner holds `(offset, length)` | **T5 — removed.** the fix is upstream-shaped: `skippy_bytes_ref` / `skippy_runtime_config_v2` (below) |
 | `size_t → uint32_t` arena offsets, `int64 → int32` layers, `uint64` byte products (P0-3, P2-2) | `static_cast` is unconditional; `*` wraps | **T6 `narrow<To>`, `checked_mul`, `ArenaSlice::make`** |
 | endianness / unchecked enum casts in the GGUF reader (P2-2) | `memcpy` into `T` for any `T`; `static_cast<ggml_type>(file_u32)` | **T7 `WireScalar`, `SizedGgmlType`** |
 | `LlamaBackend{}.plan_model_stages(...)` (P1-4) | member callable on a temporary | **T8 ref-qualified `&` members** |
@@ -70,57 +78,24 @@ attached. Put the rule in the error message.
 
 ---
 
-## T1 — `Fallible<E>`: a failure-only result with no polarity
+## T1 — removed: the failure-only spelling is `std::expected<void, E>`
 
-```cpp
-// include/skippy/fallible.h
-#pragma once
-#include <concepts>
-#include <optional>
-#include <utility>
+`Fallible<E>` was the failure-only result with no `operator bool`, so a
+polarity flip could not compile. The rules have since settled the other way
+(ENFORCEMENT.md §4): **failure-only results have one spelling, and it
+chains** — `std::expected<void, E>` composes with `and_then`, which a
+`failed()`/`error()` inspection API cannot; `optional<E>`-as-failure composes
+on the *failure* (`optional::and_then` runs on the engaged value), which is
+why it is banned. The header `include/skippy/fallible.h` and its pins are
+deleted; nothing used it. What replaces each guarantee:
 
-namespace skippy {
-
-template <typename E>
-class [[nodiscard]] Fallible {
-public:
-    static constexpr Fallible ok() noexcept { return Fallible{}; }
-    static constexpr Fallible fail(E error) noexcept(std::is_nothrow_move_constructible_v<E>) {
-        return Fallible{std::move(error)};
-    }
-
-    [[nodiscard]] constexpr bool failed() const noexcept { return error_.has_value(); }
-    [[nodiscard]] constexpr const E& error() const& noexcept { return *error_; }
-    [[nodiscard]] constexpr E&& error() && noexcept { return std::move(*error_); }
-
-    template <std::invocable<const E&> F>
-    [[nodiscard]] constexpr auto map_error(F&& f) const -> Fallible<std::invoke_result_t<F, const E&>> {
-        using R = Fallible<std::invoke_result_t<F, const E&>>;
-        return failed() ? R::fail(std::invoke(std::forward<F>(f), *error_)) : R::ok();
-    }
-
-private:
-    constexpr Fallible() = default;
-    constexpr explicit Fallible(E error) : error_(std::move(error)) {}
-    std::optional<E> error_;
-};
-
-} // namespace skippy
-```
-
-Contracts (in `tests/type_contracts_test.cpp`):
-
-```cpp
-static_assert(!requires(skippy::Fallible<int> f) { !f; });                    // nothing to flip
-static_assert(!requires(skippy::Fallible<int> f) { static_cast<bool>(f); });
-static_assert(!std::is_constructible_v<skippy::Fallible<int>, bool>);         // bool is a predicate, not an error
-static_assert(!std::is_default_constructible_v<skippy::Fallible<int>>);       // ok() or fail(), nothing implicit
-```
-
-Use: every current `std::optional<E>`-as-failure and every
-`std::expected<void, E>`. The call site reads
-`if (auto r = validate(x); r.failed()) return r;` — there is exactly one way
-to spell it. `std::expected<T, E>` stays for value-returning calls.
+- *one spelling* — the tree-wide flip commit plus `skippy-no-failure-optional`
+  (was `skippy-no-expected-void`, reversed), `skippy-optional-error-polarity`
+  for the transition;
+- *no throwing accessor* — `skippy-no-throwing-accessor` bans `.value()` on
+  both `expected` and `optional` everywhere, for good;
+- *no `bool` error channel* — unchanged rule; a failure-only call returns
+  `std::expected<void, E>`.
 
 ---
 
@@ -326,89 +301,49 @@ getter is called in exactly one place.*
 
 ---
 
-## T5 — `ZString` and `CStringTable`: the only road to `const char*`
+## T5 — removed: the ABI gets views (`skippy_bytes_ref`), not a string type
 
-```cpp
-// include/skippy/cstrings.h
-#pragma once
-#include <algorithm>
-#include <expected>
-#include <ranges>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
+`ZString` / `CStringTable` were the façade's answer to `const char*` in the
+C ABI. The rules now route that problem upstream (ENFORCEMENT.md §4, "The ABI
+gets views too"): where the C ABI takes `const char*` for bytes the planner
+hands out as `(offset, length)`, the fix is a llama.cpp-shaped patch, not a
+string type above the boundary. The header
+`include/skippy/cstrings.h` and its pins are deleted.
 
-namespace skippy {
+Upstream shape (patches blocked-upstream, tracked in `UPSTREAM.md`):
 
-enum class CStringError { EmbeddedNul };
+```c
+/* skippy.h */
+typedef struct {
+    const uint8_t* data;   /* not NUL-terminated: length is authoritative */
+    uint32_t        length;
+} skippy_bytes_ref;
 
-// Owned bytes with no interior NUL: c_str() is total.
-class ZString {
-public:
-    [[nodiscard]] static std::expected<ZString, CStringError> from(std::string_view bytes) {
-        if (std::ranges::contains(bytes, '\0')) return std::unexpected(CStringError::EmbeddedNul);
-        return ZString{std::string{bytes}};
-    }
-    [[nodiscard]] const char* c_str() const noexcept { return bytes_.c_str(); }
-    [[nodiscard]] std::string_view view() const noexcept { return bytes_; }
-
-private:
-    explicit ZString(std::string bytes) noexcept : bytes_(std::move(bytes)) {}
-    std::string bytes_;
-};
-
-// Owns the strings and the pointer array a C ABI wants; pointers are valid while *this lives.
-class CStringTable {
-public:
-    [[nodiscard]] static std::expected<CStringTable, CStringError> from(std::span<const std::string_view> values) {
-        CStringTable table;
-        table.owned_.reserve(values.size());
-        for (const std::string_view value : values) {               // the one loop: a ranges::to over an expected-yielding
-            auto z = ZString::from(value);                            // transform needs C++26 to stay a pipeline
-            if (!z) return std::unexpected(z.error());
-            table.owned_.push_back(std::move(*z));
-        }
-        table.pointers_ = table.owned_ | std::views::transform(&ZString::c_str) | std::ranges::to<std::vector>();
-        return table;
-    }
-    [[nodiscard]] std::span<const char* const> pointers() const noexcept { return pointers_; }
-    [[nodiscard]] const char* const* data_or_null() const noexcept { return pointers_.empty() ? nullptr : pointers_.data(); }
-    [[nodiscard]] std::size_t size() const noexcept { return pointers_.size(); }
-
-    CStringTable(const CStringTable&) = delete;            // pointers would alias the other table
-    CStringTable& operator=(const CStringTable&) = delete;
-    CStringTable(CStringTable&&) noexcept = default;       // std::string SSO: re-derive pointers after a move
-    CStringTable& operator=(CStringTable&&) noexcept = default;
-
-private:
-    CStringTable() = default;
-    std::vector<ZString> owned_;
-    std::vector<const char*> pointers_;
-};
-
-} // namespace skippy
+typedef struct skippy_runtime_config_v2 {
+    uint32_t struct_size;            /* SKIPPY_RUNTIME_CONFIG_V2_SIZE */
+    skippy_bytes_ref execution_contract;
+    skippy_bytes_ref* resident_identities;  uint32_t resident_count;
+    skippy_bytes_ref* activation_imports;   uint32_t import_count;
+    skippy_bytes_ref* activation_exports;   uint32_t export_count;
+    /* v1 fields by embedded struct, so old callers still compile */
+    skippy_runtime_config v1;
+} skippy_runtime_config_v2;
 ```
 
-(Re-deriving `pointers_` in the move operations is necessary because short
-strings live inside the `std::string` object; implement the move constructor
-explicitly, or hold `std::unique_ptr<std::string>` per entry.)
+- callers that hold the plan (the arena) pass `skippy_bytes_ref{ptr, len}`
+  pairs; nothing copies, nothing NUL-terminates, and the arena/NUL trap class
+  is gone at the source instead of fenced in the façade;
+- the planner probe, the pipeline probe, the staged probe, the harness and
+  `staged.cpp` all speak `skippy_runtime_config_v2`, which deletes the six
+  hand-rolled `string_view → const char*` loops in one move;
+- until the patch lands, the arena-terminated fallback is **feature-tested on
+  the ABI version macro** (`#if SKIPPY_ABI_VERSION < ...`) with a
+  "fallback can go" test that fails the day the macro moves — the same
+  pattern as `SKIPPY_DELETE` in `tests/toolchain_test.cpp`.
 
-Then one `StagedRuntimeConfig` type owns five `CStringTable`s and a `ZString`
-contract and exposes `const skippy_runtime_config&` — `staged.cpp`, the
-planner probe, the pipeline probe, the staged probe and the harness all
-construct it, and the six loops are gone. For the arena views in
-`StageLoadConfig`, add an `ArenaView` wrapper that exposes `bytes()` but not
-`data()`, so the only way to a pointer is `CStringTable::from`:
-
-```cpp
-static_assert(!requires(skippy::ArenaView v) { v.data(); });
-static_assert(!std::is_convertible_v<skippy::ArenaView, const char*>);
-```
-
-This also forces the open question in P2-7 to be answered in code: either
-`ZString::from` is the identity path (text), or identities get a separate
-`std::array<std::byte, 32>` type that no `const char*` ABI function accepts.
+`UPSTREAM.md` carries the patch link and a `blocked-upstream` row; the entry
+names what the fallback costs (one copy per config build) so the incentive to
+rebase stays visible.
 
 ---
 
@@ -543,6 +478,9 @@ public:
 };
 ```
 
+`PlanLease::configs` takes the same pair — it hands out views into the
+store the lease pins (ENFORCEMENT.md §4).
+
 ```cpp
 static_assert(!requires(std::string p, std::span<const LayerRange> r) { LlamaBackend{}.plan_model_stages(p, r); });
 static_assert(!requires(std::string p, std::span<const LayerRange> r) { StageChain::open(p, r); });
@@ -648,13 +586,15 @@ Pair it with the tidy checks that catch the remaining dynamic shapes —
 
 ## Order of introduction
 
-1. `Fallible<E>` + `narrow`/`checked_mul` (mechanical, no behaviour change,
-   biggest surface).
-2. `SessionGeometry`/`ContextCapacity`/`AdmittedBatch` (closes P0-A with the
-   pool signature change).
-3. `ClassifierHead` (closes P0-B).
-4. `CStringTable` + `StagedRuntimeConfig` (collapses six copies; settles
-   P2-7).
-5. `&`-qualified planning + `StageChain::open(backend&)` (P1-4).
-6. `Failure<Code>` OOM arm (P2-11), then the wider P3-3 unification.
-7. `StageRequest` (P1-6), `mdspan`, `WireScalar`.
+Deferred per ENFORCEMENT.md §0 — the current phase isolates the boundaries
+with clang-tidy and introduces a type only where it backs a P0-closing code
+change. The order for when the designs are picked up again:
+
+1. `SessionGeometry`/`ContextCapacity`/`AdmittedBatch` (backs the pool
+   capacity label; closes P0-A).
+2. `ClassifierHead` (backs head detection; closes P0-B).
+3. `&`-qualified planning + `StageChain::open(backend&)` (P1-4).
+4. `Failure<Code>` OOM arm (P2-11), then the wider P3-3 unification.
+5. `StageRequest` (P1-6), `mdspan`, `WireScalar`.
+6. The `skippy_bytes_ref` / `skippy_runtime_config_v2` upstream patch rides
+   the llama.cpp rebase queue, not this tree's commit order.
