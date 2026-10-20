@@ -165,6 +165,41 @@ private:
 inline constexpr std::uint64_t kMaxInventoryEntries = 1ULL * 1024U * 1024U;
 inline constexpr std::uint32_t kMaxArrayDepth = 8;
 
+/// GGUF metadata value types. The wire encoding stores these exact integers
+/// (spec: "metadata value types"), so the raw `std::uint32_t` a hostile file
+/// carries is compared against `std::to_underlying` members rather than
+/// cast into the enum — a value outside the table must stay a number, not
+/// become an out-of-range enumerator.
+enum class GgufMetadataType : std::uint32_t {
+    Uint8 = 0,
+    Int8 = 1,
+    Uint16 = 2,
+    Int16 = 3,
+    Uint32 = 4,
+    Int32 = 5,
+    Float32 = 6,
+    Bool = 7,
+    String = 8,
+    Array = 9,
+    Uint64 = 10,
+    Int64 = 11,
+    Float64 = 12,
+};
+
+inline constexpr auto kTypeString = std::to_underlying(GgufMetadataType::String);
+inline constexpr auto kTypeArray = std::to_underlying(GgufMetadataType::Array);
+inline constexpr auto kTypeUint32 = std::to_underlying(GgufMetadataType::Uint32);
+
+/// The first four bytes of every GGUF file: "GGUF" little-endian.
+inline constexpr std::uint32_t kGgufMagic = 0x46554747U;
+/// GGUF v1 predates the string-table layout this parser reads; v4+ changes
+/// the header shape until a spec lands.
+inline constexpr std::uint32_t kMinGgufVersion = 2;
+inline constexpr std::uint32_t kMaxGgufVersion = 3;
+
+/// The per-layer tensor prefix every GGUF writer uses.
+inline constexpr std::string_view kLayerPrefix = "blk.";
+
 /// Multiplies a row's byte size by the extents after the first without
 /// wrapping: a negative extent or a product that would overflow uint64 is
 /// nullopt. Pure so the mocked suite can pin the arithmetic; ggml only
@@ -196,18 +231,19 @@ row_size_bytes(std::uint32_t type, const std::array<std::int64_t, 4>& dimensions
 /// Fixed widths of the scalar GGUF value types; anything else is a string,
 /// an array, or unknown.
 inline std::optional<std::uint64_t> scalar_width(std::uint32_t type) {
+    using enum GgufMetadataType;
     switch (type) {
-    case 0:                           // u8
-    case 1:                           // i8
-    case 7: return std::uint64_t{1};  // bool
-    case 2:                           // u16
-    case 3: return std::uint64_t{2};  // i16
-    case 4:                           // u32
-    case 5:                           // i32
-    case 6: return std::uint64_t{4};  // f32
-    case 10:                          // u64
-    case 11:                          // i64
-    case 12: return std::uint64_t{8}; // f64
+    case std::to_underlying(Uint8):
+    case std::to_underlying(Int8):
+    case std::to_underlying(Bool): return std::uint64_t{1};
+    case std::to_underlying(Uint16):
+    case std::to_underlying(Int16): return std::uint64_t{2};
+    case std::to_underlying(Uint32):
+    case std::to_underlying(Int32):
+    case std::to_underlying(Float32): return std::uint64_t{4};
+    case std::to_underlying(Uint64):
+    case std::to_underlying(Int64):
+    case std::to_underlying(Float64): return std::uint64_t{8};
     default: return std::nullopt;
     }
 }
@@ -232,13 +268,13 @@ inline std::expected<void, std::string> skip_array(Reader& reader, std::uint32_t
         }
         return reader.skip(count * *width);
     }
-    if (element_type == 8) { // string array: walk lengths, not bytes
+    if (element_type == kTypeString) { // string array: walk lengths, not bytes
         for (std::uint64_t index = 0; index < count; ++index) {
             if (auto ok = reader.skip_string(); !ok) return ok;
         }
         return {};
     }
-    if (element_type != 9) {
+    if (element_type != kTypeArray) {
         return std::unexpected("unknown metadata type " + std::to_string(element_type));
     }
     for (std::uint64_t index = 0; index < count; ++index) {
@@ -271,7 +307,7 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
         if (!key) return std::unexpected(key.error());
         std::uint32_t type = 0;
         if (auto ok = reader.read(type); !ok) return std::unexpected(ok.error());
-        if (*key == "general.alignment" && type == 4) {
+        if (*key == "general.alignment" && type == kTypeUint32) {
             std::uint32_t value = 0;
             if (auto ok = reader.read(value); !ok) return std::unexpected(ok.error());
             // Zero divides by zero at the data-start round-up, and the
@@ -382,9 +418,11 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_inventory(const 
     std::uint64_t tensor_count = 0;
     std::uint64_t metadata_count = 0;
     if (auto ok = reader.read(magic); !ok) return std::unexpected(ok.error());
-    if (magic != 0x46554747U) return std::unexpected("not a GGUF file");
+    if (magic != kGgufMagic) return std::unexpected("not a GGUF file");
     if (auto ok = reader.read(version); !ok) return std::unexpected(ok.error());
-    if (version < 2 || version > 3) return std::unexpected("unsupported GGUF version");
+    if (version < kMinGgufVersion || version > kMaxGgufVersion) {
+        return std::unexpected("unsupported GGUF version");
+    }
     if (auto ok = reader.read(tensor_count); !ok) return std::unexpected(ok.error());
     if (auto ok = reader.read(metadata_count); !ok) return std::unexpected(ok.error());
 
@@ -539,7 +577,7 @@ inline std::expected<std::string, std::string> model_architecture(const std::str
         if (!key) return std::unexpected(key.error());
         std::uint32_t type = 0;
         if (auto ok = reader.read(type); !ok) return std::unexpected(ok.error());
-        if (*key == "general.architecture" && type == 8) {
+        if (*key == "general.architecture" && type == kTypeString) {
             auto value = reader.read_string_view();
             if (!value) return std::unexpected(value.error());
             architecture.assign(*value);
@@ -560,13 +598,20 @@ inline std::expected<std::string, std::string> model_architecture(const std::str
 inline std::int32_t layer_count_from(const std::vector<TensorInfo>& tensors) {
     std::int32_t layers = 0;
     for (const TensorInfo& tensor : tensors) {
-        const auto position = tensor.name.rfind("blk.");
-        if (position == std::string::npos) continue;
-        if (position != 0 && tensor.name[position - 1] != '.') continue;
-        const auto dot = tensor.name.find('.', position + 4);
-        const auto end = dot == std::string::npos ? tensor.name.size() : dot;
-        const char* first = tensor.name.data() + position + 4;
-        const char* last = tensor.name.data() + end;
+        const std::string_view name = tensor.name;
+        const auto position = name.rfind(kLayerPrefix);
+        if (position == std::string_view::npos) continue;
+        if (position != 0 && name[position - 1] != '.') continue;
+        // The index is the run between "blk." and the next separator.
+        // from_chars takes bare pointers - its signature has not grown a
+        // string_view overload in C++23 - so the slice exists to bound the
+        // call, and only the call touches the pointers.
+        const std::string_view remainder = name.substr(position + kLayerPrefix.size());
+        const auto separator = remainder.find('.');
+        const std::string_view digits =
+            separator == std::string_view::npos ? remainder : remainder.substr(0, separator);
+        const char* first = digits.data();
+        const char* last = first + digits.size();
         std::int64_t block = 0;
         const auto [pointer, code] = std::from_chars(first, last, block);
         if (code != std::errc{} || pointer != last || block < 0 ||
