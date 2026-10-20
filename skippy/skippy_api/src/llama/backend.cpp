@@ -146,7 +146,18 @@ LlamaSession::LlamaSession(llama_context_ptr context, LlamaModel& model, const l
       decoder_start_(decoder_start), batch_limit_(llama_n_batch(context_.get())),
       max_tokens_(max_tokens), sequences_(sequences) {}
 
-LlamaSession::~LlamaSession() { model_.recycle(std::move(context_), max_tokens_, sequences_); }
+LlamaSession::~LlamaSession() {
+    if (!context_) return;
+    // The pool takes the context back quiescent and labelled with the capacity
+    // llama actually built: a pass may still be in flight (llama_decode
+    // returning does not mean the backend finished), and a warmed larger
+    // context relabelled with this session's smaller geometry hides capacity
+    // the pool could otherwise serve.
+    llama_synchronize(context_.get());
+    const std::uint32_t sequences = std::max(1U, llama_n_seq_max(context_.get()));
+    const std::uint32_t capacity = llama_n_ctx(context_.get()) / sequences;
+    model_.recycle(std::move(context_), capacity, sequences);
+}
 
 llama_context_ptr LlamaModel::take_idle_context(std::uint32_t max_tokens,
                                                 std::uint32_t sequences) noexcept {
@@ -222,7 +233,11 @@ LlamaSession::process_sequences(std::span<const std::span<const Token>> inputs) 
     }
     detail::fill_embedding_batches(*batch_, inputs);
 
+    // llama_decode returns before the backend finishes; the embeddings getters
+    // synchronise, llama_memory_clear does not. Clearing in-flight memory is a
+    // race on every GPU backend, so quiesce first - a no-op when idle.
     if (llama_memory_t memory = llama_get_memory(context_.get())) {
+        llama_synchronize(context_.get());
         llama_memory_clear(memory, true);
     }
     if (run_pass(Pass::Decode) != 0) {
@@ -314,7 +329,9 @@ std::expected<void, WorkloadError> LlamaSession::process_tokens(std::span<const 
     if (auto reserved = reserve_batch(count); !reserved) return reserved;
     detail::fill_embedding_batch(*batch_, tokens, sequence_);
 
+    // Same contract as process_sequences: quiesce before clearing memory.
     if (llama_memory_t memory = llama_get_memory(context_.get())) {
+        llama_synchronize(context_.get());
         llama_memory_clear(memory, true);
     }
     if (run_pass(pass) != 0) {
@@ -504,7 +521,12 @@ LlamaBackend::load_model(const ModelConfig& config) {
                                classifier_workload ? LLAMA_POOLING_TYPE_RANK
                                                    : LLAMA_POOLING_TYPE_UNSPECIFIED,
                                warm.sequences, profile.embedding_workload))}) {
-            loaded->recycle(std::move(context), warm.max_tokens, warm.sequences);
+            // Label the warm context with the capacity llama built, not the
+            // request that triggered it, so the pool can serve every geometry
+            // the context actually fits.
+            const std::uint32_t sequences = std::max(1U, llama_n_seq_max(context.get()));
+            const std::uint32_t capacity = llama_n_ctx(context.get()) / sequences;
+            loaded->recycle(std::move(context), capacity, sequences);
         }
         return loaded;
     } catch (const std::bad_alloc&) {

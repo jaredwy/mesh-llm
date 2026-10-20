@@ -185,6 +185,15 @@ thing that survives it.
   that is held across a call into the backend is a deadlock and a serialiser
   hiding as a lock; if you find yourself holding one that long, the state wants
   to be an RCU snapshot instead.
+- **llama returns before the backend finishes.** `llama_decode`/`llama_encode`
+  may hand control back with work still in flight; the embeddings getters
+  synchronise, `llama_memory_clear` and the retained-context pool do not.
+  Clearing memory a pass is still writing is a race on every GPU backend —
+  quiesce with `llama_synchronize` before every `llama_memory_clear` and
+  before recycling a context into the pool (a no-op when idle). The pool
+  labels a context with the capacity llama built (`llama_n_ctx` /
+  `llama_n_seq_max`), never with the requesting session's smaller geometry,
+  or a warmed larger context hides capacity the pool then cannot serve.
 
 ### Rust
 
@@ -334,6 +343,13 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
 
 ## Traps that have already bitten us
 
+- **A `std::move` argument poisons every other argument in the same call.**
+  Parameter construction order is unspecified, so
+  `recycle(std::move(context), llama_n_ctx(context.get()))` moves the pointer
+  out before — or after — the getter reads it; on the wrong order the getter
+  dereferences null and the first witness is an e2e SEGFAULT. Hoist every use
+  of a moved-from object into its own statement before the call
+  (`~LlamaSession` is the fixed example).
 - **A native getter with a non-zero default is not a presence test.**
   `llama_model_n_cls_out` defaults to 1 and is only overwritten when
   `classifier.output_labels` ships, so reading it ungated called every
