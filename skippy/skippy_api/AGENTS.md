@@ -56,12 +56,25 @@ thing that survives it.
 
 ### Types and interfaces
 
+- **Climb the enforcement ladder; types are the default.** Every rule lives at
+  the highest rung that can express it — unrepresentable (type),
+  uncompilable (deleted overload), unlintable (boundary check), untestable,
+  written down — and `docs/ENFORCEMENT.md` is the authority: the ladder
+  (§1), the pattern→rule thresholds (§2), the API-surface ownership rules
+  (§3), the type rules (§4), the lint scoping (§5) and the porting checklist
+  (§7). The types that make the PR #2481 bug classes unrepresentable are
+  specified in `docs/TYPE_DESIGN.md` and land in `include/`; their forbidden
+  spellings are pinned in `tests/type_contracts_test.cpp`.
 - **No out-parameters above the C ABI.** Functions return their result. The only
   out-params are inside `skippy_*` calls we do not own, and they stop at the
   wrapper.
-- **`std::expected<T, E>` when a value comes back.** **`std::optional<E>` when
-  only a failure can come back.** Never `std::expected<void, E>`.
-  `nullopt` means "it worked"; an engaged optional is the reason it did not.
+- **A result that can only fail is `Fallible<E>`.** Never
+  `std::expected<void, E>`, never `std::optional<E>` as a failure channel,
+  never `bool`. `Fallible` has no `operator bool`, so a polarity flip does
+  not compile; the call site reads `if (auto r = validate(x); r.failed())
+  return r;`. `std::expected<T, E>` stays for value-returning calls.
+  *Migration checks:* `skippy-no-expected-void`,
+  `skippy-optional-error-polarity` (docs/ENFORCEMENT.md §4).
 - **Never swallow a caught exception's message.** `catch (const std::exception&)`
   plus a generic error code makes OOM indistinguishable from a backend failure;
   the backend's `what()` must survive into the failure the caller sees
@@ -76,7 +89,9 @@ thing that survives it.
   never by `subspan`/`at`/`substr` over values that came from outside; and an
   allocation that must happen inside a failure handler gets its own
   `catch (...)` so the OOM reporter cannot itself OOM (`LlamaSession::run_pass`
-  recording `last_backend_error_` is the pattern). If a function can
+  recording `last_backend_error_` is the pattern; out-of-memory itself is a
+  code, never text — `Failure<Code>::out_of_memory()` allocates nothing,
+  docs/TYPE_DESIGN.md T9). If a function can
   legitimately fail, it returns `expected`/`optional` and is not `noexcept`.
 - **Strong types for identities.** `ProfileId`, `TensorId`, `ValueIdentity`,
   `LayerRange` — not bare strings and ints that can be swapped by accident.
@@ -90,11 +105,13 @@ thing that survives it.
   because a defaulted kind would silently flip `summarize()`'s recurrent
   classification rather than merely mislabel. Do not smuggle an unconstrained
   `int` through the middle of the library.
-- **No silent widening or narrowing.** Every `static_cast` between integer
-  widths needs a reason: a bound was checked, an ABI demands exactly this width,
-  or the value is provably in range. Cast *at the boundary* (where the check
-  lives), not scattered through the call path — and when the check is "it fits
-  because we checked three lines up", say so in a comment or name the helper.
+- **No silent widening or narrowing.** Every width change goes through
+  `narrow<To>()` (an `optional`, so the failure is a value) or
+  `checked_mul`/`checked_add`; `narrow.h` is the only file that spells
+  `static_cast` between integer types. A `static_cast` is allowed only on a
+  constant that fits, or with `// bounded by <the proof>` on the line
+  (docs/ENFORCEMENT.md §4, docs/TYPE_DESIGN.md T6). Cast *at the boundary*
+  (where the check lives), not scattered through the call path.
 - **`std::size_t` for counts and sizes.** Signed 32-bit is an ABI width, not a
   vocabulary type; use it only at the boundary and convert immediately.
 - **Move-only by default** for anything owning a resource (models, sessions,
@@ -191,9 +208,17 @@ thing that survives it.
   Clearing memory a pass is still writing is a race on every GPU backend —
   quiesce with `llama_synchronize` before every `llama_memory_clear` and
   before recycling a context into the pool (a no-op when idle). The pool
-  labels a context with the capacity llama built (`llama_n_ctx` /
-  `llama_n_seq_max`), never with the requesting session's smaller geometry,
-  or a warmed larger context hides capacity the pool then cannot serve.
+  labels a context from the context itself — the min of `llama_n_ctx`,
+  `llama_n_batch` and `llama_n_ubatch`, divided by
+  `max(1, llama_n_seq_max)` (`pooled_geometry`) — never with the requesting
+  session's geometry: llama pads `n_ctx` to a 256 multiple but keeps the
+  requested `n_batch`/`n_ubatch` (llama-context.cpp:332-334, 377-390) and
+  `llama_decode` `GGML_ASSERT`s — aborts, not errors — when tokens exceed
+  `n_batch`/`n_ubatch` (llama-context.cpp:1612, 1896-1898), so a label from
+  `n_ctx` alone lets a session issue a batch the context cannot take.
+  Rung 1 upgrade: `ContextCapacity` from the live context + admission
+  through `BatchLimit::admit` (docs/TYPE_DESIGN.md T2/T3; would have caught
+  P0-A).
 
 ### Rust
 
@@ -350,6 +375,14 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   dereferences null and the first witness is an e2e SEGFAULT. Hoist every use
   of a moved-from object into its own statement before the call
   (`~LlamaSession` is the fixed example).
+- **Workload classification tests the tensor, never the family.** The
+  classifier head is `cls.output.weight` (llama-arch.cpp:536), loaded by
+  bert-family AND qwen3/qwen3vl/qwen35/lfm2; `family.cpp` names 16 of ~240
+  architectures. `binary_search` the (memoised, name-sorted) inventory and
+  read `n_cls_out` only as the width of a head proven present. Family gates
+  misclassify in both directions; tensor tests cannot.
+  Rung 1 upgrade: `ClassifierHead::detect` from the sorted inventory
+  (docs/TYPE_DESIGN.md T4; would have caught P0-1, P0-B).
 - **A native getter with a non-zero default is not a presence test.**
   `llama_model_n_cls_out` defaults to 1 and is only overwritten when
   `classifier.output_labels` ships, so reading it ungated called every
@@ -468,6 +501,10 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   hashlib on both padding shapes.
 - **`rust::String` requires UTF-8.** Planner identities are **binary**
   (`resident_tensor_at_v1` returns an identity, not a name). Hex-encode them.
+  (Boundary: native → Rust text. The other identity boundary — native → C
+  ABI — is the arena/NUL trap two entries down; they are different roads and
+  different rules. Rung 1 artefact for the C-ABI road: `ZString` /
+  `CStringTable`, docs/TYPE_DESIGN.md T5, settles P2-7.)
 - **cxx cannot hold a non-copyable C++ object by value.** Use `UniquePtr<T>`,
   methods taking `Pin<&mut T>`, and declare `type T;` in the bridge block.
 - **The formatter reflows lambdas.** A `str.replace()` over formatted C++ can
@@ -479,7 +516,9 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   rest of the arena into one garbage tensor name and the loader rejects it
   with a several-hundred-character "resident tensor". Copy to owning
   `std::string`s first — `staged.cpp`'s `own()` is the pattern — then take
-  `.c_str()`.
+  `.c_str()`. Rung 1 upgrade: `ZString` / `CStringTable` are the only road
+  to `const char*`, and `ArenaView` exposes `bytes()` but not `data()`
+  (docs/TYPE_DESIGN.md T5; would have caught the probe bug).
 - **`ffi_vs_api_benchmark.cpp` warnings are errors.** A `nodiscard` result must
   be `(void)`-cast, and the benchmark will fail to compile (not run) if missed.
 
