@@ -119,11 +119,17 @@ pub mod ffi {
         dimensions: usize,
     }
 
+    /// plan_stages result: failure is the envelope's, never an entry's.
+    #[derive(Debug)]
+    struct PlanStagesResult {
+        ok: bool,
+        error: String,
+        stages: Vec<StagePlanInfo>,
+    }
+
     /// One stage of a split model.
     #[derive(Debug)]
     struct StagePlanInfo {
-        ok: bool,
-        error: String,
         layer_start: i32,
         layer_end: i32,
         /// Hex-encoded: the contract is opaque bytes, not text.
@@ -252,7 +258,7 @@ pub mod ffi {
         /// Writes the unit-normalised embedding into the first `dimensions`
         /// elements of `output`.
         /// Plans `stage_count` contiguous stages over the model at `path`.
-        fn plan_stages(self: &Bridge, path: &str, stage_count: u32) -> Vec<StagePlanInfo>;
+        fn plan_stages(self: &Bridge, path: &str, stage_count: u32) -> PlanStagesResult;
 
         /// A stage opened as its own model.
         type StagedModel;

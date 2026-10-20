@@ -30,6 +30,7 @@ struct WorkloadResult;
 struct EmbedResult;
 struct RerankResult;
 struct StagePlanInfo;
+struct PlanStagesResult;
 struct ChainValidation;
 struct StagedModelResult;
 struct StagedSessionResult;
@@ -83,7 +84,10 @@ public:
     [[nodiscard]] ModelResult load_model(rust::Str path) noexcept;
 
     /// Plans `stage_count` contiguous stages over the model at `path`.
-    [[nodiscard]] rust::Vec<StagePlanInfo>
+    /// Failure is the envelope's, never an entry's: the result carries
+    /// ok/error and the stages together, so an out-of-memory entry cannot be
+    /// mistaken for "a model with no plan".
+    [[nodiscard]] PlanStagesResult
     plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept;
 
     /// Opens stage `index` of `stages` over the model at `path`.

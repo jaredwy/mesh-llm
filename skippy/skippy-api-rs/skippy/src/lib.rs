@@ -206,12 +206,13 @@ impl Runtime {
     /// its execution contract, and the values crossing each boundary. The
     /// planner's identities are opaque 32-byte tags, so they are hex-encoded.
     pub fn plan_stages(&self, path: &str, stages: u32) -> Result<Vec<StagePlan>, StagePlanError> {
-        let infos = self.lock().plan_stages(path, stages);
+        let result = self.lock().plan_stages(path, stages);
+        if !result.ok {
+            return Err(StagePlanError::Rejected(result.error));
+        }
+        let infos = result.stages;
         let mut plans = Vec::with_capacity(infos.len());
         for info in infos {
-            if !info.ok {
-                return Err(StagePlanError::Rejected(info.error));
-            }
             plans.push(StagePlan {
                 profile_id: info.profile_id_hex,
                 graph_identity: info.graph_identity_hex,

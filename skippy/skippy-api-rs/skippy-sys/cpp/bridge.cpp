@@ -148,20 +148,21 @@ Result in_band_failed(const std::string &message) noexcept {
   return result;
 }
 
-// The plan surface returns a Vec whose entry carries the failure flag, so
-// even the vec allocation can fail while reporting a failure. The message
-// copy cannot: lossy never throws (see in_band_failed).
-rust::Vec<StagePlanInfo> plan_stages_failed(const std::string &message) noexcept {
-  StagePlanInfo info{};
-  info.ok = false;
-  info.error = rust::String::lossy(message);
+// The in-band mirror of guarded<>: the result reports failure through
+// ok=false plus a message, so the catch arms write that message instead of
+// a status. Every catch ladder on the staged and chain surface collapses
+// into one call; the prefix names the entry point that failed.
+template <typename Result, std::invocable Body>
+  requires std::same_as<std::invoke_result_t<Body>, Result>
+Result guarded_message(const char *where, Body &&body) noexcept {
   try {
-    rust::Vec<StagePlanInfo> output;
-    output.push_back(std::move(info));
-    return output;
+    return std::forward<Body>(body)();
+  } catch (const std::bad_alloc &) {
+    return in_band_failed<Result>(std::string(where) + ": out of memory");
+  } catch (const std::exception &failure) {
+    return in_band_failed<Result>(std::string(where) + ": " + failure.what());
   } catch (...) {
-    // Even the entry allocation failed: an empty vec reads as "no plan".
-    return rust::Vec<StagePlanInfo>{};
+    return in_band_failed<Result>(std::string(where) + ": unknown failure");
   }
 }
 
@@ -291,16 +292,12 @@ split_layers(std::int32_t layers, std::uint32_t stage_count) {
 
 } // namespace
 
-rust::Vec<StagePlanInfo>
+PlanStagesResult
 Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
-  try {
-    rust::Vec<StagePlanInfo> output;
-    const auto fail = [&output](const std::string &message) {
-    StagePlanInfo info{};
-    info.ok = false;
-    info.error = rust::String::lossy(message);
-    output.push_back(std::move(info));
-    return output;
+  return guarded_message<PlanStagesResult>("plan_stages", [&]() -> PlanStagesResult {
+    PlanStagesResult result{};
+    const auto fail = [](const std::string &message) {
+    return in_band_failed<PlanStagesResult>(message);
     };
     if (stage_count == 0)
     return fail("a plan needs at least one stage");
@@ -324,7 +321,6 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
 
     for (const skippy::StageLoadConfig &config : lease->configs) {
     StagePlanInfo info{};
-    info.ok = true;
     info.profile_id_hex = hex_of(config.profile_id);
     info.graph_identity_hex = hex_of(config.graph_identity);
     info.profile_identity_hex = hex_of(config.profile_identity);
@@ -357,16 +353,11 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
     for (const std::string_view value : config.activation_export_bindings) {
     info.export_binding_hex.push_back(hex_of(value));
     }
-    output.push_back(std::move(info));
+    result.stages.push_back(std::move(info));
     }
-    return output;
-  } catch (const std::bad_alloc &) {
-    return plan_stages_failed("plan_stages: out of memory");
-  } catch (const std::exception &failure) {
-    return plan_stages_failed(std::string("plan_stages: ") + failure.what());
-  } catch (...) {
-    return plan_stages_failed("plan_stages: unknown failure");
-  }
+    result.ok = true;
+    return result;
+  });
 }
 
 namespace {
@@ -382,7 +373,7 @@ constexpr ModelFamily to_ffi(skippy::ModelFamily family) noexcept {
 
 StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages,
                                             std::uint32_t index) noexcept {
-    try {
+  return guarded_message<StagedModelResult>("load_staged_model", [&]() -> StagedModelResult {
       StagedModelResult result{};
       result.ok = false;
 
@@ -418,17 +409,11 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
       result.ok = true;
       result.model = std::make_unique<StagedModel>(std::move(*model));
       return result;
-    } catch (const std::bad_alloc &) {
-      return in_band_failed<StagedModelResult>("load_staged_model: out of memory");
-    } catch (const std::exception &failure) {
-      return in_band_failed<StagedModelResult>(std::string("load_staged_model: ") + failure.what());
-    } catch (...) {
-      return in_band_failed<StagedModelResult>("load_staged_model: unknown failure");
-    }
+  });
 }
 
 StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noexcept {
-    try {
+  return guarded_message<StagedSessionResult>("create_staged_session", [&]() -> StagedSessionResult {
       StagedSessionResult result{};
       result.ok = false;
       auto session = model.get().create_session();
@@ -439,18 +424,12 @@ StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noex
       result.ok = true;
       result.session = std::make_unique<StagedSession>(std::move(*session));
       return result;
-    } catch (const std::bad_alloc &) {
-      return in_band_failed<StagedSessionResult>("create_staged_session: out of memory");
-    } catch (const std::exception &failure) {
-      return in_band_failed<StagedSessionResult>(std::string("create_staged_session: ") + failure.what());
-    } catch (...) {
-      return in_band_failed<StagedSessionResult>("create_staged_session: unknown failure");
-    }
+  });
 }
 
 StagedEmbedResult Bridge::staged_embed(StagedSession& session, rust::Slice<const std::int32_t> tokens,
                                        rust::Slice<float> output) noexcept {
-    try {
+  return guarded_message<StagedEmbedResult>("staged_embed", [&]() -> StagedEmbedResult {
       StagedEmbedResult result{};
       result.ok = false;
 
@@ -463,13 +442,7 @@ StagedEmbedResult Bridge::staged_embed(StagedSession& session, rust::Slice<const
       result.ok = true;
       result.dimensions = *produced;
       return result;
-    } catch (const std::bad_alloc &) {
-      return in_band_failed<StagedEmbedResult>("staged_embed: out of memory");
-    } catch (const std::exception &failure) {
-      return in_band_failed<StagedEmbedResult>(std::string("staged_embed: ") + failure.what());
-    } catch (...) {
-      return in_band_failed<StagedEmbedResult>("staged_embed: unknown failure");
-    }
+  });
 }
 
 ModelFamily Bridge::model_family(rust::Str path) const noexcept {
@@ -486,7 +459,7 @@ ModelFamily Bridge::model_family(rust::Str path) const noexcept {
 
 ChainValidation Bridge::validate_chain(rust::Str path,
                                        std::uint32_t stage_count) const noexcept {
-  try {
+  return guarded_message<ChainValidation>("validate_chain", [&]() -> ChainValidation {
     ChainValidation result{};
     result.ok = false;
 
@@ -517,13 +490,7 @@ ChainValidation Bridge::validate_chain(rust::Str path,
     }
     result.ok = true;
     return result;
-  } catch (const std::bad_alloc &) {
-    return in_band_failed<ChainValidation>("validate_chain: out of memory");
-  } catch (const std::exception &failure) {
-    return in_band_failed<ChainValidation>(std::string("validate_chain: ") + failure.what());
-  } catch (...) {
-    return in_band_failed<ChainValidation>("validate_chain: unknown failure");
-  }
+  });
 }
 
 ModelResult Bridge::load_model(rust::Str path) noexcept {
@@ -760,7 +727,7 @@ struct CopyingSink {
 
 ChainResult Bridge::open_chain(rust::Str path,
                                rust::Slice<const std::int32_t> ranges) noexcept {
-  try {
+  return guarded_message<ChainResult>("open_chain", [&]() -> ChainResult {
     ChainResult result{};
     result.ok = false;
     result.chain = std::make_unique<StageChainHandle>();
@@ -782,18 +749,12 @@ ChainResult Bridge::open_chain(rust::Str path,
     result.chain = std::make_unique<StageChainHandle>(std::move(*chain));
     result.ok = true;
     return result;
-  } catch (const std::bad_alloc &) {
-    return in_band_failed<ChainResult>("open_chain: out of memory");
-  } catch (const std::exception &failure) {
-    return in_band_failed<ChainResult>(std::string("open_chain: ") + failure.what());
-  } catch (...) {
-    return in_band_failed<ChainResult>("open_chain: unknown failure");
-  }
+  });
 }
 
 ChainRunResult Bridge::run_chain(StageChainHandle &chain,
                                  rust::Slice<const std::int32_t> tokens) noexcept {
-  try {
+  return guarded_message<ChainRunResult>("run_chain", [&]() -> ChainRunResult {
     ChainRunResult result{};
     result.ok = false;
     result.has_frame = false;
@@ -811,13 +772,7 @@ ChainRunResult Bridge::run_chain(StageChainHandle &chain,
     }
     result.ok = true;
     return result;
-  } catch (const std::bad_alloc &) {
-    return in_band_failed<ChainRunResult>("run_chain: out of memory");
-  } catch (const std::exception &failure) {
-    return in_band_failed<ChainRunResult>(std::string("run_chain: ") + failure.what());
-  } catch (...) {
-    return in_band_failed<ChainRunResult>("run_chain: unknown failure");
-  }
+  });
 }
 
 } // namespace skippy::ffi
