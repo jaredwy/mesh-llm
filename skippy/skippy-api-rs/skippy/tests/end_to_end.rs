@@ -33,18 +33,6 @@ fn model_path(variable: &str) -> Option<String> {
     path
 }
 
-/// Optional model coverage: skips even under `SKIPPY_TEST_REQUIRE_MODELS`,
-/// which only mandates the embedder and the reranker.
-fn optional_model_path(variable: &str) -> Option<String> {
-    match std::env::var(variable) {
-        Ok(path) if !path.is_empty() => Some(path),
-        _ => {
-            eprintln!("{variable} unset; skipping");
-            None
-        }
-    }
-}
-
 /// Loads the embedder, or returns `None` when the test model is not configured.
 fn embedder() -> Option<(Runtime, String)> {
     let path = model_path("SKIPPY_TEST_MODEL")?;
@@ -110,7 +98,7 @@ fn a_chain_runs_every_stage_and_hands_back_a_terminal_frame() {
 /// the 3/4-depth prefix frame (28672 bytes) agrees exactly.
 #[test]
 fn a_chain_terminal_frame_is_stage_count_invariant() {
-    let Some(path) = optional_model_path("SKIPPY_TEST_CAUSAL") else {
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else {
         return;
     };
     let runtime = Runtime::new().expect("runtime");
@@ -264,7 +252,7 @@ fn a_causal_decoder_is_not_a_reranker() {
     // test: ungated, every decoder-only chat GGUF reads as a one-output
     // classifier and lands in the rerank table with a score head that does
     // not exist. The count is encoder-gated at load time.
-    let Some(path) = optional_model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
     let runtime = Runtime::new().unwrap();
     let model = runtime.load_model(&path).unwrap();
     let mut session = model.create_session(SessionConfig::default()).unwrap();

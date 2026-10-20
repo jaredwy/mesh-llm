@@ -305,12 +305,14 @@ skippy-llama-api-planner-probe model *ARGS="":
 # Models are optional; pass both to include the real-model Rust tests.
 [unix]
 [positional-arguments]
-skippy-api-verify embed_model="" reranker_model="" *ARGS="":
+skippy-api-verify embed_model="" reranker_model="" causal_model="" *ARGS="":
     #!/usr/bin/env bash
     set -euo pipefail
     embed="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     reranker="${1:-}"
+    if [[ $# -gt 0 ]]; then shift; fi
+    causal="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     printf '%s\n' '== clang-format' >&2
     just skippy-llama-api-format-check
@@ -321,7 +323,7 @@ skippy-api-verify embed_model="" reranker_model="" *ARGS="":
     printf '%s\n' '== Rust fmt + clippy' >&2
     just skippy-api-rs-lint
     printf '%s\n' '== Rust tests' >&2
-    just skippy-api-rs-e2e "$embed" "$reranker"
+    just skippy-api-rs-e2e "$embed" "$reranker" "$causal"
     printf '%s\n' 'ok: skippy_api is ready to commit' >&2
 
 # Format and lint the Rust facade with the gates CI applies elsewhere.
@@ -336,11 +338,11 @@ skippy-api-rs-lint:
 # Verify, stage the API sources, and commit. Message must be a Conventional Commit.
 [unix]
 [positional-arguments]
-skippy-api-checkpoint message="" embed_model="" reranker_model="":
+skippy-api-checkpoint message="" embed_model="" reranker_model="" causal_model="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${1:-}" ]]; then
-      printf '%s\n' 'usage: just skippy-api-checkpoint "<conventional commit subject>" [embed.gguf] [reranker.gguf]' >&2
+      printf '%s\n' 'usage: just skippy-api-checkpoint "<conventional commit subject>" [embed.gguf] [reranker.gguf] [causal.gguf]' >&2
       exit 1
     fi
     subject="$1"
@@ -348,7 +350,9 @@ skippy-api-checkpoint message="" embed_model="" reranker_model="":
     embed="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     reranker="${1:-}"
-    just skippy-api-verify "$embed" "$reranker"
+    if [[ $# -gt 0 ]]; then shift; fi
+    causal="${1:-}"
+    just skippy-api-verify "$embed" "$reranker" "$causal"
     git add skippy/skippy_api skippy/skippy-api-rs just/skippy.just .gitignore
     if git diff --cached --quiet; then
       printf '%s\n' 'nothing staged; tree already matches the checkpoint' >&2
@@ -376,9 +380,10 @@ skippy-api-rs-e2e embed_model="" reranker_model="" causal_model="" *ARGS="":
       export PATH="/opt/homebrew/opt/lld/bin:$PATH"
     fi
     cd skippy/skippy-api-rs
-    # With both models supplied, a skipped test is a failure: this is the run CI
-    # should use. One model may be passed to cover a single workload locally.
-    if [[ -n "$embed" && -n "$reranker" ]]; then
+    # With all three models supplied, a skipped test is a failure: this is the
+    # run CI should use (the causal lane is part of required coverage). Any
+    # subset may be passed to cover a single workload locally.
+    if [[ -n "$embed" && -n "$reranker" && -n "$causal" ]]; then
       export SKIPPY_TEST_REQUIRE_MODELS=1
     fi
     # The causal model is optional coverage; exporting it empty would trip the
