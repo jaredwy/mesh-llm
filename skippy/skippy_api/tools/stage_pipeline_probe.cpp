@@ -343,7 +343,7 @@ int main(int argc, char** argv) {
     }
     const std::int32_t layers =
         argc > 3 ? std::stoi(argv[3])
-                 : static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+                 : skippy::probe::layer_count_from(*inventory);
     const std::string text = argc > 4 ? argv[4] : "the quick brown fox jumps over the lazy dog";
 
     std::vector<skippy::PackageTensor> tensors;

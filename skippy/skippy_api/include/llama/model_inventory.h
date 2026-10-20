@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <cstring>
@@ -273,10 +274,12 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
         if (*key == "general.alignment" && type == 4) {
             std::uint32_t value = 0;
             if (auto ok = reader.read(value); !ok) return std::unexpected(ok.error());
-            // Zero divides by zero at the data-start round-up and a value
-            // that is not a power of two misaligns every tensor offset the
-            // native loader computes; upstream requires a power of two.
-            if (value == 0U || (value & (value - 1U)) != 0U) {
+            // Zero divides by zero at the data-start round-up, and the
+            // loader rounds every tensor offset up to a multiple of the
+            // alignment: only a power of two keeps those offsets where the
+            // writer placed them. `has_single_bit` is exactly "power of
+            // two", and it rejects zero by definition.
+            if (!std::has_single_bit(value)) {
                 return std::unexpected("invalid general.alignment");
             }
             alignment = value;
@@ -331,7 +334,11 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& 
                                                                         std::uint64_t count) {
     if (count > kMaxInventoryEntries) return std::unexpected("implausible tensor count");
     std::vector<TensorRecord> records;
-    records.reserve(static_cast<std::size_t>(count));
+    // The count is file-controlled and only bounded by the plausibility cap,
+    // so the first reserve is capped too: a hostile header cannot make the
+    // parse allocate entries for tensors it never actually carries, and the
+    // vector grows naturally once real records arrive.
+    records.reserve(static_cast<std::size_t>(std::min<std::uint64_t>(count, 8192)));
     for (std::uint64_t index = 0; index < count; ++index) {
         TensorRecord record;
         auto name = reader.read_string_view();
@@ -403,8 +410,10 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_inventory(const 
         }
         tensor.offset += data_start;
     }
-    // Package tensor ids must be strictly increasing.
-    std::ranges::sort(*tensors, {}, &TensorInfo::name);
+    // Package tensor ids must be strictly increasing, which read_tensors
+    // already guarantees by sorting its records before copying them into
+    // this order; the bounds pass above rewrites offsets in place and does
+    // not touch names.
     return tensors;
 }
 
@@ -545,9 +554,11 @@ inline std::expected<std::string, std::string> model_architecture(const std::str
 /// names are file-controlled: `blk.` counts only at the start of a name or
 /// after a `.` separator, the index is parsed with `from_chars` bounded by
 /// the next separator, and anything malformed — empty, non-numeric,
-/// negative, or out of range — is skipped, never thrown.
-inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
-    std::int64_t layers = 0;
+/// negative, or out of range — is skipped, never thrown. The result is
+/// `int32_t` because that is the layer-range currency every caller uses;
+/// an index that would not fit is treated as malformed, not narrowed.
+inline std::int32_t layer_count_from(const std::vector<TensorInfo>& tensors) {
+    std::int32_t layers = 0;
     for (const TensorInfo& tensor : tensors) {
         const auto position = tensor.name.rfind("blk.");
         if (position == std::string::npos) continue;
@@ -559,10 +570,10 @@ inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
         std::int64_t block = 0;
         const auto [pointer, code] = std::from_chars(first, last, block);
         if (code != std::errc{} || pointer != last || block < 0 ||
-            block == std::numeric_limits<std::int64_t>::max()) {
+            block >= std::numeric_limits<std::int32_t>::max()) {
             continue;
         }
-        layers = std::max<std::int64_t>(layers, block + 1);
+        layers = std::max<std::int32_t>(layers, static_cast<std::int32_t>(block) + 1);
     }
     return layers;
 }

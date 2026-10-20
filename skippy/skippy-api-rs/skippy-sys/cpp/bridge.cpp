@@ -310,7 +310,7 @@ Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) const noexcept {
     if (!inventory)
     return fail(inventory.error());
     const auto layers =
-    static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+    skippy::probe::layer_count_from(*inventory);
     const auto ranges = split_layers(layers, stage_count);
     if (!ranges)
     return fail(ranges.error());
@@ -392,7 +392,7 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
       result.error = rust::String::lossy(inventory.error());
       return result;
       }
-      const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+      const auto layers = skippy::probe::layer_count_from(*inventory);
       const auto ranges = split_layers(layers, stages);
       if (!ranges) {
       result.error = rust::String::lossy(ranges.error());
@@ -497,7 +497,7 @@ ChainValidation Bridge::validate_chain(rust::Str path,
     return result;
     }
     const auto layers =
-    static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+    skippy::probe::layer_count_from(*inventory);
     const auto ranges = split_layers(layers, stage_count);
     if (!ranges) {
     result.error = rust::String::lossy(ranges.error());

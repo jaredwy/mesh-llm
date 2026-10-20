@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         std::cerr << "inventory: " << inventory.error() << "\n";
         return 1;
     }
-    const auto layers = static_cast<std::int32_t>(skippy::probe::layer_count_from(*inventory));
+    const auto layers = skippy::probe::layer_count_from(*inventory);
     const std::int32_t half = layers / 2;
     const std::array ranges{skippy::LayerRange{0, half}, skippy::LayerRange{half, layers}};
 

@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
         std::cerr << "gguf: " << inventory.error() << "\n";
         return 2;
     }
-    const std::int64_t layers = argc > 2 ? std::stoll(argv[2]) : layer_count_from(*inventory);
+    const std::int32_t layers = argc > 2 ? static_cast<std::int32_t>(std::stoll(argv[2])) : layer_count_from(*inventory);
     std::cout << "gguf: " << inventory->size() << " tensors, " << layers << " layers\n";
 
     std::vector<skippy::PackageTensor> tensors;
