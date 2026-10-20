@@ -116,6 +116,7 @@ if(SKIPPY_BUILD_LLAMA)
     src/llama/stage_planner.cpp
     src/llama/staged.cpp
     src/llama/stage_chain.cpp
+    src/llama/type_contracts.cpp
     )
   add_library(Skippy::Llama ALIAS skippy_llama)
   target_compile_options(skippy_llama PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -166,6 +167,8 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/workload_profile_test.cpp
       tests/borrow_stress_test.cpp
       tests/inventory_parser_test.cpp
+      tests/type_contracts_test.cpp
+      tests/toolchain_test.cpp
   )
   target_compile_options(skippy_api_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(skippy_api_tests
